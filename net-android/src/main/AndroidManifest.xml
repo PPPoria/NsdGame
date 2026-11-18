@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  :net-android 的清单。库清单里的 <uses-permission> 会被合并进 :app，
+  所以这一份就是网络权限的唯一出处，不要再去 app 里重复声明。
+
+  权限清单的依据见 docs/ARCHITECTURE.md §5.2：
+
+    INTERNET                        —— NsdManager 注册/发现、TCP 监听与连接，缺了是静默失败
+    ACCESS_NETWORK_STATE            —— 判断当前是否在 Wi-Fi/以太网，用于给"为什么连不上"的可读提示
+    FOREGROUND_SERVICE              —— 房主承载 TCP 监听的保活服务（Android 9+ 必需）
+    FOREGROUND_SERVICE_DATA_SYNC    —— targetSdk 34+ 强制要求与 foregroundServiceType 配对
+    POST_NOTIFICATIONS              —— Android 13+；不授予时服务仍运行但通知不可见，必须降级提示
+
+  以下两项刻意不加，需要真机验证后再决定（ARCHITECTURE.md §7 风险 15）：
+
+    CHANGE_WIFI_MULTICAST_STATE     —— 用系统 NsdManager 时通常不需要 MulticastLock；
+                                       只有在"能 discover 但 resolve 一直失败"时才加
+
+  <service> 声明（RoomForegroundService + foregroundServiceType="dataSync"）
+  在 M3 里程碑随实现一起加入，现在写了会指向不存在的类。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+</manifest>
