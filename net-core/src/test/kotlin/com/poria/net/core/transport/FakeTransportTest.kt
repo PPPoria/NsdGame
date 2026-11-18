@@ -10,12 +10,14 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -94,6 +96,25 @@ class FakeTransportTest {
 
         assertEquals(MsgType.CMD, decoded.type)
         assertEquals("落子到 (7,7)", decoded.payload.jsonPrimitive.content)
+
+        transport.close()
+    }
+
+    @Test
+    fun `对端不收集时 send 挂起而不抛异常（与真实传输的背压语义一致）`() = runBlocking {
+        val transport = FakeTransport()
+        val listener = transport.listen(0)
+        val accepting = async { withTimeout(TIMEOUT_MS) { listener.incoming.first() } }
+        val dialer = transport.connect(Endpoint.Tcp("fake", listener.localPort), TIMEOUT_MS)
+        accepting.await() // 对端连接已建立，但故意**不收集** incoming
+
+        val ping = frame(MsgType.PING)
+        val completed = withTimeoutOrNull(500) {
+            // 入站缓冲 64：从第 65 条开始必须挂起，而不是抛"队满"
+            repeat(200) { dialer.send(ping) }
+            true
+        }
+        assertNull("send 应在缓冲满后挂起（背压），而不是抛异常或悄悄丢弃", completed)
 
         transport.close()
     }

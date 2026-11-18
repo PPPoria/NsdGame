@@ -9,6 +9,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
@@ -20,6 +21,10 @@ import kotlinx.coroutines.flow.flow
  * 使用方式与 [TcpTransport] 完全一致，区别只有一点：`Endpoint.Tcp` 的 `host` 不参与寻址，
  * 只用 `port` 找到对应的监听器（`Endpoint` 是 FROZEN 的 sealed interface，不允许多加一个
  * `Endpoint.Fake`）。端口传 0 时由本类从 [DEFAULT_FIRST_PORT] 起分配。
+ *
+ * **背压语义与真实传输对齐**（容易踩的坑）：单连接入站缓冲同样是 64 条，`send` 是**挂起**的
+ * （不是 `trySend` 满了就抛）。会话层测试里"连续发 100 条、对端迟点再收"的行为在 Fake 与
+ * 真机上一致，不会出现"Fake 全绿、真机背压时行为不同"。
  *
  * 不做的事：不模拟延迟、不模拟丢包、不模拟半包 —— 它验证的是**会话层逻辑**，
  * 帧层的半包/粘包由 `:net-proto` 的暴力切分测试负责。
@@ -113,8 +118,12 @@ class FakeTransport : Transport {
                     "消息 ${msg.size} 字节超出帧上限",
                 )
             }
-            if (peer.inbox.trySend(msg).isFailure) {
-                throw IOException("对端已关闭（$peerLabel）")
+            // ⚠️ 必须是**挂起**的 send（不是 trySend）：真实传输在背压时会挂起，
+            // 会话层若在测试里依赖"send 会等"，Fake 与真机行为必须一致，否则假绿。
+            try {
+                peer.inbox.send(msg)
+            } catch (e: ClosedSendChannelException) {
+                throw IOException("对端已关闭（$peerLabel）", e)
             }
         }
 

@@ -16,6 +16,7 @@ import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
+import java.util.concurrent.ThreadFactory
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -46,18 +47,23 @@ import kotlinx.coroutines.withTimeoutOrNull
  * |---|---|
  * | 端口 | [listen] 默认 0 → 系统分配，见 `ServerSocket.localPort` |
  * | 并发模型 | 每连接两个协程：读循环 + 写 Channel |
- * | 调度器 | 专属 `newFixedThreadPool`，线程名 `nsdnet-N`（**不用 `:base` 的 ThreadPool**：其 AbortPolicy 会炸掉一次发送） |
+ * | 调度器 | 专属 **cached** 线程池，线程名 `nsdnet-N`；**不用 `:base` 的 ThreadPool**（其 AbortPolicy 会炸掉一次发送），也不蹭 `Dispatchers.IO` |
  * | 读超时 | `Socket.soTimeout`（默认 0 = 阻塞到有数据；心跳超时归会话层） |
  * | 写超时 | 每次 [Connection.send] 用 `withTimeoutOrNull` 兜住，超时即断开，防对端不消费导致挂死 |
  * | 帧长上限 | [FrameHeader.MAX_PAYLOAD_BYTES]，超限 `CloseReason.Protocol` 并断开 |
  *
  * 用法：进程内一个实例即可（`:app` 的 `LanRuntime` 持有）。用完调 [close]。
  *
- * **线程池容量（部署时必须知道的边界）**：每条连接的读循环会**长期占住一个线程**
- * （阻塞 IO 的必然代价），所以单个实例能撑的并发连接数 ≈ `poolSize - 1`（还要留一个线程跑 accept）。
- * ADR-008 定的 8 线程对应本标准部署形态：**房主进程只 listen（≤ 6 人 = 5 条连接 + accept = 6 用掉 6 个）**，
- * 客端进程只 connect（1 条连接）。若要在同一实例上既 listen 又 connect（测试里常见），
- * 必须把 [poolSize] 调大，否则读协程会把线程抽干、写协程拿不到线程 → 表现为"写超时"。
+ * **线程池容量（ADR-013，修订 ADR-008）**：每条连接的读循环会**长期占住一个线程**（阻塞 IO 的必然代价），
+ * 所以"能撑多少连接"完全由连接数决定，而不是由线程池参数决定：
+ * - 默认 `maxIoThreads = null` → **cached 池**（空闲线程 60s 回收、有活才建线程），线程数天然被
+ *   会话层的 `maxPlayers = 6` 与现实连接数限住，**同一实例既 listen 又 connect 也不会抽干**；
+ * - **真正的并发上界是会话层的 maxPlayers**，不是线程池参数——把上界放在线程池是对错误的层设限
+ *   （ADR-008 把 `poolSize` 钉成常量 8 时的症状是：房主 6 人 + 写协程共用同一 dispatcher，
+ *   峰值 7~11 线程即被抽干，表现为 `写超时 10000ms`，属于最难诊断的一类）；
+ * - `maxIoThreads` 只作为**兜底旋钮**保留（例如恶意对端狂开连接时想给线程总数一个天花板）：
+ *   传非 null 即切成 fixed 池。注意 fixed 池满了会让读协程排队 → 又是同一类写超时症状，
+ *   所以正常部署不要设它。
  */
 class TcpTransport(
     /**
@@ -67,18 +73,40 @@ class TcpTransport(
     private val readTimeoutMs: Int = 0,
     /** 单条消息写超时（毫秒）。超时即认为对端不消费，断开。 */
     private val writeTimeoutMs: Long = DEFAULT_WRITE_TIMEOUT_MS,
-    /** 专属 IO 线程数。6 人并发 = ~14 个阻塞协程，8 线程按 ADR-008 定稿。 */
-    poolSize: Int = DEFAULT_IO_THREADS,
+    /**
+     * IO 线程数上限。
+     * - `null`（默认，ADR-013）：cached 池 —— 线程数由连接数决定，而连接数上界由会话层的
+     *   `maxPlayers` 决定。同一实例既 listen 又 connect 也是安全的。
+     * - 非 null：切成 fixed 池（兜底旋钮）。⚠️ **设了就必须 ≥ 预期连接数 + 4**，否则就是把
+     *   ADR-008 那个坑原样装回来；[MIN_FIXED_IO_THREADS] 是硬下限，构造时 `require` 挡住。
+     *   语义上这个旋钮本身就是"把 P0 装回来"——别为了"保险"去设它。
+     */
+    maxIoThreads: Int? = null,
 ) : Transport, AutoCloseable {
+
+    init {
+        require(maxIoThreads == null || maxIoThreads >= MIN_FIXED_IO_THREADS) {
+            "maxIoThreads=$maxIoThreads 太低：fixed 池必须 ≥ $MIN_FIXED_IO_THREADS（见 ADR-013）。" +
+                "而且它只是兜底旋钮——真正该做的不是设它，而是让线程数随连接数伸缩（保持 null）。"
+        }
+    }
 
     override val scheme: String = "tcp"
 
     private val threadSeq = AtomicInteger(0)
 
-    /** 专属调度器：不许蹭 `Dispatchers.IO`，也不许用 `:base` 的 ThreadPool。 */
-    private val dispatcher = Executors.newFixedThreadPool(poolSize) { runnable ->
+    private val threadFactory = ThreadFactory { runnable ->
         Thread(runnable, "nsdnet-${threadSeq.incrementAndGet()}").apply { isDaemon = true }
-    }.asCoroutineDispatcher()
+    }
+
+    /** 专属调度器（ADR-013）：默认 cached 池，线程数随连接数伸缩。 */
+    private val dispatcher = (
+        if (maxIoThreads == null) {
+            Executors.newCachedThreadPool(threadFactory)
+        } else {
+            Executors.newFixedThreadPool(maxIoThreads, threadFactory)
+        }
+        ).asCoroutineDispatcher()
 
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
 
@@ -302,8 +330,8 @@ class TcpTransport(
     private class Outgoing(val bytes: ByteArray, val ack: CompletableDeferred<Unit>)
 
     companion object {
-        /** 专属 IO 线程数（ADR-008）。 */
-        const val DEFAULT_IO_THREADS: Int = 8
+        /** fixed 池的硬下限：低于 8 条等于把 ADR-008 的 P0 装回来。 */
+        const val MIN_FIXED_IO_THREADS: Int = 8
 
         /** 单条消息写超时。对端 10s 不消费就认为它挂了。 */
         const val DEFAULT_WRITE_TIMEOUT_MS: Long = 10_000

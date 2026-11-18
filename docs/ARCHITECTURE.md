@@ -135,7 +135,7 @@ interface Advertisement {
 **对"Transport 产出 ByteArray 流"的修正**：契约上移到**完整消息**。半包责任留在 Transport 内，否则两层都能坏、两层都要测。
 
 ```kotlin
-typealias Message = ByteArray   // 一条完整消息的 payload，不含长度头
+typealias Message = ByteArray   // 一条完整消息 = 一整帧（9 字节帧头 + JSON 载荷），见 ADR-014
 
 sealed interface Endpoint {     // 为 BLE / Wi-Fi Direct 预留，不要用 host:port 字符串
     data class Tcp(val host: String, val port: Int) : Endpoint
@@ -353,13 +353,16 @@ Guest                                      Host
   │ discover(NSD) → Ready(desc)             │
   │ 版本本地预检（protoVersion/gameId/gameVersion）  ← UI 层就过滤不兼容房间
   │──── TCP connect ───────────────────────▶│ accept → CONNECTED
-  │──── HELLO{protoVer, gameId, gameVer,    │
-  │           playerId, nick} ─────────────▶│ 校验版本
-  │◀─── WELCOME{roomInstanceId, sessionId, roomMeta} ─│
+  │──── HELLO{gameId, gameVersion, playerId, nick, deviceModel} ─▶│ 校验版本
+  │◀─── WELCOME{room: RoomDescriptor, sessionId} ───────────────│ 加入前快照，仅展示/预检
   │──── JOIN_REQ{passcode, nick} ──────────▶│ 校验口令 / 座位 / 阶段
-  │◀─── JOIN_OK{mySeat, sessionToken, players[], phase} ─│  → ACTIVE
-  │◀─── SNAPSHOT{seq, state, hash}（若已开局）───────────│
+  │◀─── JOIN_OK{sessionToken, mySeat} ──────│ ← **纯私有凭证**，不含名册（ADR-018）
+  │◀─── SNAPSHOT{seq, state, room, players[]} ─│ ← **名册/座位/设置的唯一权威来源**
 ```
+
+**第三趟握手由两帧组成**（私有凭证 + 权威快照），两帧来自房主的**同一次状态读取**，所以不可能互相矛盾。`JOIN_OK` 之所以不能并入 `SNAPSHOT`：`sessionToken` 是**私有**信息，塞进广播快照等于把每个人的重连凭证发给所有人。
+
+**名册、座位分配、游戏设置一律只从 `SNAPSHOT` 读**（ADR-017 / ADR-018）。`WELCOME.room` 与 `JOIN_OK.mySeat` 都是"非权威副本"，`PROTOCOL.md` 必须标注，UI 不得据它们渲染名册。
 
 口令由**房主明文比对**（D6）。客端不缓存旧口令重试。
 
@@ -368,7 +371,10 @@ Guest                                      Host
 ```
 Host UI ─ startGame(config) ─▶ HostSession
    │ canStart(seats) == false → 直接回 UI 错误，不发网络包
-   │ 生成 GAME_STARTED{config, seats[], initialSnapshot, seq=1}
+   │ 生成 SNAPSHOT{seq = 下一个值, state, room(phase=Playing), players[]}
+   │   —— 不新增 GAME_STARTED 类型，见 ADR-016（终局同理：SNAPSHOT{phase=Finished}）
+   │   —— **seq 不保证等于 1**：大厅期变更也推进同一个计数器（ADR-017 补充）
+   │   —— 客端判定开局只能看 room.phase，**禁止**用 seq 猜
    │ 本地 reduce（房主自己的 UI 与客端走同一条码路径，避免双实现）
    └ broadcast → 所有 ACTIVE peer；SUSPENDED 记为 pendingResume，重连时补 SNAPSHOT
 ```
@@ -392,11 +398,13 @@ Guest.send(cmd)                        Host.dispatch(from, cmd)
 ```
 1. 任一侧连续 6 次（30s）无 PONG，或 IO 异常
 2a. 客端 → RECONNECTING，指数退避 1s/2s/4s/8s（上限 60s）
-2b. 房主 → SUSPENDED，广播 PLAYER_OFFLINE{seat}，不动座位、不产生游戏事件
-3. 重连成功 → 校验 token → ACTIVE → 发 SNAPSHOT{seq, state, hash}
+2b. 房主 → SUSPENDED，广播 SNAPSHOT{players[] 中该 seat 的 online=false}；不动座位、不产生游戏事件
+3. 重连成功 → 校验 token → ACTIVE → 发 SNAPSHOT{seq, state, room, players[]}
    （不重放事件窗口：重连时状态可能已大幅前进，全量快照更省事且不漏）
-4. 60s 过期 → DROPPED → 广播 PLAYER_LEFT{seat} → 交给插件决定
+4. 60s 过期 → DROPPED → 广播 SNAPSHOT{players[] 不再包含该 seat} → 交给插件决定
 ```
+
+> 原稿此处写的是 `PLAYER_OFFLINE{seat}` / `PLAYER_LEFT{seat}` —— 这两个类型在 `MsgType` 里**从未存在**，与 `GAME_STARTED` 属于同一类错误（时序图假设了不存在的类型）。已按 ADR-017 统一为「一切状态变更走 `SNAPSHOT`」。
 
 **⑤ 房主退出（三种语义必须区分）**
 
@@ -435,20 +443,24 @@ Guest.send(cmd)                        Host.dispatch(from, cmd)
 
 | 方向 | type | 载荷要点 |
 |---|---|---|
-| C→H | `HELLO` | protoVersion, gameId, gameVersion, playerId, nick, deviceModel |
-| H→C | `WELCOME` | roomInstanceId, sessionId, roomMeta |
-| H→C | `REJECT` | `RejectCode`(VERSION_MISMATCH / ROOM_FULL / IN_PLAY / PASSCODE_WRONG / BANNED) + reason |
+| C→H | `HELLO` | gameId, gameVersion, playerId, nick, deviceModel（**不重复 `protoVersion`**：帧头已有） |
+| H→C | `WELCOME` | `room: RoomDescriptor`（加入前快照，**非权威**）+ sessionId |
+| H→C | `REJECT` | `RejectCode`(VERSION_MISMATCH / ROOM_FULL / IN_PLAY / PASSCODE_WRONG / BANNED) + reason（**致命**：随后断开） |
 | C→H | `JOIN_REQ` | passcode, nick |
-| H→C | `JOIN_OK` | mySeat, sessionToken, players[], phase |
-| H→C | `SNAPSHOT` | seq, stateHash, state, phase, players[] |
-| C→H | `CMD` | cmdSeq, payload |
-| H→C | `CMD_RESULT` | cmdSeq, accepted, rejectReason? |
+| H→C | `JOIN_OK` | sessionToken, mySeat（**纯私有凭证**；名册权威来源是 SNAPSHOT，见 ADR-018） |
+| H→C | `SNAPSHOT` | seq, stateHash, state, room, players[]（**权威状态的唯一来源**，见 ADR-017） |
+| C→H | `CMD` | cmdSeq, payload（游戏命令，`PLAYING` 期有效） |
+| H→C | `CMD_RESULT` | cmdSeq, accepted, rejectReason?（软拒绝，**不断连**） |
 | H→C | `EVENT_BATCH` | fromSeq, events[seq, payload]（≤16 条/批） |
 | C→H | `RESUME_REQ` | token, fromSeq |
 | H→C | `SYNC_HASH` | seq, stateHash（每 ~5s 或每 10 事件） |
+| C→H | `LOBBY_REQ` | reqSeq, op(`ChangeSeat` \| `Leave`), seat?（**大厅期唯一意图信道**，见 ADR-019） |
+| H→C | `LOBBY_RESULT` | reqSeq, op, ok, reason?（软拒绝，**不断连**） |
 | 双向 | `PING` / `PONG` | 无载荷 |
 | H→C | `KICK` / `BYE` | reason |
-| 双向 | `ERROR` | 协议级错误，随后断开 |
+| 双向 | `ERROR` | code, message（**致命**：随后断开） |
+
+> **两条硬约束**：① 只有 `SNAPSHOT` 是权威状态源，其余消息携带的 `room`/`mySeat` 都是标注 `not-authoritative` 的展示副本；② "软拒绝"（`CMD_RESULT` / `LOBBY_RESULT` 的 `ok=false`）与"致命拒绝"（`REJECT` / `ERROR`）是两类语义，**不允许混用**——把"座位被占了"塞进 `REJECT` 会让客端被迫断线。
 
 ### 4.3 序列号 / ACK 判定
 
@@ -742,7 +754,134 @@ class GuestSession(
 
 理由：D5 选的是"客端用同一份 `GameLogic` 推演"，只给一个 id 客端无法本地预演。这条同时解释了为什么 `:app` 必须依赖 `:game-*`（它要 new 出插件实例）。
 
-### 12.3 变更流程
+### 12.3 M0 交付评审修订（ADR-013 / ADR-014）
+
+评审对象：`:net-proto` 帧层 + `:net-core/transport`（M0）。结论：**通过，P0 一项须在 M1 前修复**。
+本轮两条修订都指向**我自己的文档/ADR**，不是实现者越界。
+
+**ADR-013 · 传输线程池由常量改为派生量（修订 ADR-008）**
+
+- **事实**：ADR-008 把 `poolSize` 钉成常量 8，但「一连接一阻塞读线程」是硬约束——房主 6 人 = 5 条客端连接 + 1 个 accept 协程，而写协程与读协程共用同一 dispatcher，峰值 7~11 线程即被抽干。
+- **为什么是 P0**：症状不是「线程不够」，而是 `写超时 10000ms`，属于最难诊断的一类；且 M1 的验收标准恰好是「6 个 guest 同时加入」，会直接撞上。
+- **定稿**：`poolSize` 改为 `max(8, sessionsMaxPlayers + 4)`，或直接用 `Executors.newCachedThreadPool`（线程数天然被会话层 `maxPlayers = 6` 限住，不需要再加人工上限）。**真正的并发上界是会话层的 maxPlayers，不是线程池参数**——把上界放在线程池是对错误的层设限。
+
+**ADR-014 · `Message` = 整帧（含 9 字节帧头）**
+
+§2.3 原注释写的是「payload，不含长度头」，**是错的**，已按实现修正。理由：传输层必须读到帧头里的 `payloadLen` 才能切帧（ADR-001 把半包责任放在 Transport 内），交出不含头的字节等于把切帧能力交给上层，直接违背 ADR-001。
+
+**ADR-015 · 线缆投影与领域模型分离；否决 `players: List<JsonElement>`**
+
+传输角色在 M1 前提出：`WELCOME.roomMeta` 与 `JOIN_OK.players[]/phase` 需要 `RoomPhase` / `PlayerMeta`，而 `:net-proto` 按 R1 不能依赖 `:game-api`，因此建议 `phase` 用字符串常量、`players` 用 `List<JsonElement>`、schema 全交给游戏协议设计师。
+
+**裁决：`phase` 用 `RoomPhase` enum，`players` 用 `List<RoomPlayer>`，两者都放 `:net-proto/room/`，归架构师所有。否决 `List<JsonElement>`。**
+
+三条理由，按重要性排序：
+
+1. **`PROTOCOL.md` 的完整性就是它的全部价值。** 那个文件存在的意义是「一个不读 Kotlin 的实现者只靠它就完成互通」——这正是未来 iOS/Web 客户端、以及"传输角色换人"时的唯一保障。`List<JsonElement>` 把不完整性搬进线缆，`PROTOCOL.md` 只能写「服务器返回的东西你们自己猜」，等于把已经花掉的文档成本作废。
+2. **名册是会话概念，不是游戏概念。** `JOIN_OK`（类型码 1..5 区间）本身就是会话握手；「谁坐在第几号位、昵称是什么、在不在线」与五子棋规则无关，任何游戏都一样。所以它不是"游戏载荷"的边界模糊，而是本来就该归会话/架构层。
+3. **领域模型与线缆投影必须分开，且分开后更安全。** `Seat` / `PlayerMeta` 带规则含义（谁该行动、谁被托管），会随游戏演进；`RoomPlayer` 只描述"线缆上要说什么"。两者由**会话层在一处映射**，游戏插件永远看不到 `RoomPlayer`，proto 永远看不到 `Seat`。这正好落实了 R2「插件不碰网络」的另一半——插件也不碰线缆类型。
+
+配套硬规则（写进 `PROTOCOL.md` 的约束）：
+
+- **`JsonElement` 只允许出现在游戏载荷**（`CMD` / `CMD_RESULT` / `EVENT_BATCH` / `SNAPSHOT.state`），因为那些 schema 本来就要跟着规则演进——这是**有意的接缝**。
+- **握手与会话消息（`HELLO`..`JOIN_OK`、`PING`/`PONG`、`KICK`/`BYE`/`ERROR`）的每个字段必须有具体类型**，不允许 opaque。
+- 线缆用裸 `Int` 座位号，`Seat` 不上线缆；上线的名册统一用 `RoomPlayer`。
+- `RoomPhase` 的 `wireValue` 同时被 NSD TXT 与 JSON 使用——**单一真相**，否则会出现「列表显示 Lobby、加入时被拒为 InPlay」这类极难复现的不一致。
+
+**解锁效果**：`WELCOME` / `JOIN_OK` 现在只依赖 `:net-proto/room/`，**不依赖 `:game-api`**。传输角色的 M1 因此不再等游戏协议设计师与数据流开发。
+
+**ADR-016 · 开局/终局不新增消息类型，复用 `SNAPSHOT`**
+
+审 M1 前置时发现的不一致：§3.4 的时序图写了 `GAME_STARTED{config, seats[], initialSnapshot}`，但 `MsgType` 的 16 个类型里**没有** `GAME_STARTED` / `GAME_OVER`。
+
+**裁决：不新增类型。开局 = 广播 `SNAPSHOT{seq = 1, state, room(phase = Playing), players}`；终局 = `SNAPSHOT{room.phase = Finished}`。**
+
+理由：
+
+1. **少一种类型 = 少一条时序分支 = 少一类竞态。** 有了独立的 `GAME_STARTED`，就必须回答「客端先收到 `SNAPSHOT`、后收到 `GAME_STARTED` 怎么办」「`GAME_STARTED` 丢了但 `SNAPSHOT` 到了怎么办」——而 `SNAPSHOT` 本身已经携带 `seq` 与 `phase`，这两问自动消失。
+2. **`MsgType` 已冻结，新增类型要升 `protoVersion`。** 为一个能被 `SNAPSHOT` 完整表达的语义付一次版本号代价，不划算。
+3. **与 ADR-004 一致**：状态的整体跃迁本来就该落在一个快照锚点上；只有"增量"才走 `EVENT_BATCH`。
+
+因此 `MsgType` 保持 16 个不变，`protoVersion` 不升。§3.4 ② 已按此修正。
+
+**ADR-017 · 大厅状态变更复用 `SNAPSHOT`（采纳传输角色的方案 A）**
+
+大厅期这些事原先**没有任何信道**：换座、有人上线/离线、有人退出、房主改设置、被踢的其他人无感知。而 §3.4④ 又假设了 `PLAYER_OFFLINE` / `PLAYER_LEFT` 两个**从未存在**的类型——与 `GAME_STARTED` 是同一类错误（时序图假设了不存在的消息）。
+
+**裁决：一切大厅状态变更 → 广播 `SNAPSHOT{seq++, room, players[], state}`，客端整体替换。** 与 ADR-016 同构，`MsgType` 不因这条而增加。
+
+四条语义（传输角色要求的钉死项，均采纳）：
+
+1. **大厅快照与对局快照共用同一个 `seq` 计数器**，客端只维护一个 `lastAppliedSeq`。否则开局瞬间会出现"两个序号空间"的边界 bug。
+2. **大厅期 `state` 允许为空对象 `{}`**：由游戏协议设计师在 `SNAPSHOT` schema 里允许"尚未开局、无规则状态"。
+3. **`players[]` 在大厅快照里就是权威名册**（含 `online` / `host`），客端不得本地增删。
+4. **大厅期变更用快照；对局期不做名册变更**——D2 已规定 `Playing` 冻结座位，这条自动成立。反过来讲：对局中每次换座都广播全量棋盘是不可接受的，而 D2 让它不可能发生。
+
+否决 B（新增 `ROOM_UPDATE`）：为省几百字节付一次版本断代，并多出一条"状态可能不一致"的路径。否决 C（广播 `JOIN_OK`）：`mySeat` 是私人视角字段，广播出去语义就错了。
+
+**ADR-018 · `JOIN_OK` 降级为私有凭证；权威状态单一来源**
+
+项目所有者指出：`JOIN_OK` 里带座位号不合适。**采纳。**
+
+- `JOIN_OK{sessionToken, mySeat}`，**删除 `players[]` 与 `room`**。
+- 理由：`JOIN_OK` 是**一刻**，名册是**持续**。把持续状态塞进一刻消息，UI 必然按一次性渲染 → 之后换座、掉线、被踢全部漏掉。这是"UI 持有第二份权威状态"最常见的成因，而 ROLES §2.6 明令禁止。
+- **为什么不能把 `JOIN_OK` 整个并进 `SNAPSHOT`**：`sessionToken` 是**私有**凭证，放进广播快照等于把每个人的重连凭证发给所有人。所以第三趟握手必须是两帧（私有 ack + 权威快照），由房主**同一次状态读取**生成，因此不可能互相矛盾。
+- **为什么 `mySeat` 保留**：① 私有、零歧义；② 若靠 `playerId` 在 `players[]` 里找自己，会被"房主规范化了昵称/playerId"这类边界打破，且失败是静默的（"为什么我不在名册里"）；③ 它被明确规定为**冗余副本**，权威来源仍是 `SNAPSHOT.players`。
+- **通用原则（写进 `PROTOCOL.md`）**：**权威状态只有一个来源 = `SNAPSHOT`。** 其它消息只允许携带 (a) 私有信息，(b) 明确标注 `not-authoritative` 的展示副本。`WELCOME.room` 属于 (b)：仅用于"加入前展示 + 版本预检"。
+
+**ADR-019 · 新增 `LOBBY_REQ(17)` / `LOBBY_RESULT(18)`；`protoVersion` 1 → 2**
+
+问题：**意图与状态必须分开**（项目所有者原话）。而客端在大厅期原先**没有任何意图信道**：`CMD` 是游戏命令（`PLAYING` 才有意义，schema 归游戏协议设计师），`JOIN_REQ` 只管加入。于是"我想坐 0 号位"无处表达。
+
+为什么这不是锦上添花：**五子棋 0 号位 = 执黑 = 先手。** 两人都想执黑时，现有唯一手段是"退出重进"，而重进会重新分配座位——等于没解。
+
+定稿：
+
+| 类型 | 码 | 载荷 |
+|---|---|---|
+| `LOBBY_REQ` | 17 | `reqSeq: Int`、`op: ChangeSeat \| Leave`、`seat: Int?`（仅 ChangeSeat） |
+| `LOBBY_RESULT` | 18 | `reqSeq: Int`、`op`、`ok: Boolean`、`reason: String?` |
+
+- **`reqSeq` 只做关联，不做去重**：`ChangeSeat` / `Leave` 天然幂等，不需要 `CMD` 那套幂等去重。这反过来证明 `cmdSeq` 只对**非幂等**的游戏命令必要。
+- **软拒绝必须回执**：`REJECT` / `ERROR` 都是"随后断开"的致命语义，不能用来表达"该座位已被占"。所以 `LOBBY_RESULT` 不是冗余类型，是必需的第二半。
+- **`protoVersion` 从 1 升到 2**：改类型表就必须升版本（这是传输角色自己写的规则）。现在没有任何外部实现，升版本零成本；**偷偷加类型而不升版本，才是真正昂贵的错误**——它会让"必须升版本"从规则退化成建议，等到真有外部客户端时才集中爆炸。
+- 归属不变：两个类型都在 `:net-proto/session/`，传输角色所有、架构师审批。`PROTOCOL.md` 需同步这两行与"权威来源"原则。
+
+**ADR-017 补充 · `seq` 计数器的推论（采纳传输角色的交叉推导）**
+
+传输角色落 ADR-017 时指出：ADR-016 写的 `SNAPSHOT{seq=1, ...}` 只是**初始值**；既然大厅期变更也推进同一个 `seq`，开局快照的 `seq` 未必等于 1。**正确，我 §3.4② 的写法是错的，已修。** 由此显式定死三条：
+
+1. **客端禁止用 `seq` 判定任何语义**，尤其"是不是开局"。判定依据只有 `room.phase`。写 `if (snapshot.seq == 1L) 这是开局` 是这条最可能出的错。
+2. **`lastAppliedSeq` 只能由 `SNAPSHOT.seq` 初始化**：不得假设它从 0/1 开始，也不得假设它连续（重连时拿到的快照可能是很大的值）。
+3. **`seq` 是会话级单调量，不是回合数、不是事务序号。** 任何把 `seq` 当"第 n 步"用的做法，都会在换座之后整体错位。
+
+**ADR-020 · 线缆上必须区分"驱动 UI 的字段"与"诊断字段"**
+
+传输角色为 `LobbyResult.reason` 钉了个样例 `"座位 0 已被 张三 占据"`，并在 KDoc 里要求 UI **必须展示 reason**。这一点要拦下来。
+
+**裁决：凡是驱动 UI 表现的字段，线缆上必须是枚举；纯诊断字段可保留自由字符串，但必须在 KDoc 标注 `diagnostic-only`（禁止用于 UI 分支）。**
+
+| 消息 | 现状 | 定稿 |
+|---|---|---|
+| `LOBBY_RESULT` | `reason: String?`（驱动 UI） | `code: LobbyRejectCode` + `detail: String?`（diagnostic-only） |
+| `KICK` | `reason: String?`（驱动 UI） | `code: KickReason` + `detail?` |
+| `BYE` | `reason: String?`（驱动 UI） | `code: ByeReason` + `detail?` |
+| `REJECT` | `code: RejectCode` ✅ + `reason: String?` | code 保留；`reason` → `detail` 并标 diagnostic-only |
+| `ERROR` | `code: String` + `message: String?` | **保持**——它不驱动任何分支，只进日志。这才是"开放字符串"的正当用法 |
+
+五条理由：
+
+1. **i18n**：项目已有"代码里禁止硬编码中文"的 lint 检查（`BASE_MODULE_GUIDE.md` §8）。把中文放到**线缆**上等于绕过这条检查，却产生同样的缺陷——要做多语言时得改协议。
+2. **契约稳定性**：文案会改，枚举不会。文案上线缆 = 每次改措辞都要动协议。
+3. **可测试性**：现在的测试把一个中文串钉成了契约。断言 `code == SEAT_OCCUPIED` 是断言语义；断言 `"座位 0 已被 张三 占据"` 会在下次改文案时假红。
+4. **安全面**：服务端字符串直接进 UI，要处理长度、换行、表情、恶意内容——成本随即转移给 UI 角色。
+5. **可观测性**：`code` 能做聚合指标，自由字符串不能。
+
+建议枚举值：`LobbyRejectCode` = `SEAT_OUT_OF_RANGE` / `SEAT_OCCUPIED` / `NOT_IN_LOBBY`（已开局）/ `OP_UNSUPPORTED`，正好覆盖房主侧那四条校验；`KickReason` = `BY_HOST`；`ByeReason` = `HOST_DISSOLVED` / `HOST_EXIT`。
+
+**版本处理**：`protoVersion = 2` 尚未对外发布，本裁决并入 v2，**不另升 3**。一旦 v2 被任何外部实现（iOS/Web 客户端、第三方）吃到，就必须升 3——这是"版本号只保护已部署端"原则的另一面。
+
+### 12.4 变更流程
 
 冻结 ≠ 不可改，但改的路径唯一：
 

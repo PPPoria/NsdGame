@@ -6,11 +6,14 @@ package com.poria.net.proto
  * 归属：传输与消息协议；**签名审批：架构师**。
  *
  * 编码区间约定（给未来的自己留退路）：
- * - `1..5`   会话握手（传输角色）
- * - `6..11`  游戏载荷（游戏协议设计师；**类型码本身归传输角色**，因为它是线格式）
- * - `12..16` 心跳 / 控制（传输角色）
+ * - `1..5`    会话握手（传输角色）
+ * - `6..9`,`11` 游戏载荷（游戏协议设计师；**类型码本身归传输角色**，因为它是线格式）
+ * - `10`      重连请求 `RESUME_REQ`（**会话层协议，不含游戏语义** → 传输角色所有，不随 6..11）
+ * - `12..16`  心跳 / 控制（传输角色）
+ * - `17..18`  大厅意图 `LOBBY_REQ` / `LOBBY_RESULT`（ADR-019，传输角色）
  *
  * 新增类型 = 改线格式 = 必须升 [ProtocolVersion]，否则老客端会把新帧当 `BAD_TYPE` 断掉。
+ * 本类型表的完整变更史：`v1`（1..16）→ `v2`（+17/18，ADR-019）。
  */
 enum class MsgType(val code: Int) {
     /** C→H 首个消息：protoVersion / gameId / gameVersion / playerId / nick / deviceModel。 */
@@ -40,7 +43,7 @@ enum class MsgType(val code: Int) {
     /** H→C 增量事件批（≤16 条）。 */
     EVENT_BATCH(9),
 
-    /** C→H 重连请求：token / fromSeq。 */
+    /** C→H 重连请求：token / fromSeq。**会话层协议**（不属于 6..11 的游戏载荷区间）。 */
     RESUME_REQ(10),
 
     /** H→C 漂移检测：seq / stateHash。 */
@@ -60,6 +63,17 @@ enum class MsgType(val code: Int) {
 
     /** 双向协议级错误，随后断开。 */
     ERROR(16),
+
+    /**
+     * C→H 大厅意图：换座 / 退出（ADR-019）。
+     *
+     * 为什么不是 `CMD`：`CMD` 是**游戏**命令（`PLAYING` 期才有意义，schema 归游戏协议设计师，
+     * 校验归插件）；换座发生在 `LOBBY`，让插件去校验换座是错的所有者。
+     */
+    LOBBY_REQ(17),
+
+    /** H→C 大厅意图回执。**软拒绝**（`ok=false`）不连断，与 `REJECT`/`ERROR` 的致命语义严格区分。 */
+    LOBBY_RESULT(18),
     ;
 
     companion object {

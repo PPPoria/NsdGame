@@ -97,7 +97,7 @@
 | 拥有 | `:game-api` 全包的**提案权**；`GamePlugin` / `GameEvent` / `GameCommand` / `Seat` / `Seats`；`:net-core` 的 `session/` 包；`:net-proto` 的 `game/` 包（`SNAPSHOT` / `EVENT_BATCH` / `CMD` 载荷 schema 与语义） |
 | 输入 | 架构师的 `GamePlugin` 泛型约束与"确定性义务"条款；传输角色的帧长上限 |
 | 必须产出 | `GamePlugin` 接口签名 + 状态机图（大厅/对局/终局/掉线）+ 三类消息的语义与时序图 + 事件日志可回放格式 |
-| 禁止 | ① **不写 UI**（不碰 View/Compose/VM）② 协议变更未过传输角色评审不得进入实现 ③ 不实现具体游戏的规则 ④ 不改 `Transport` / `Connection` / 帧格式 |
+| 禁止 | ① **不写 UI**（不碰 View/Compose/VM）② 协议变更未过传输角色评审不得进入实现 ③ 不实现具体游戏的规则 ④ 不改 `Transport` / `Connection` / 帧格式 ⑤ **不把 `:game-api` 的领域类型（`Seat` / `PlayerMeta`）泄漏进 `:net-proto` 的线缆类型**——名册一律用 `RoomPlayer` 投影，映射只在 `session/` 里做一次（ADR-015） |
 | 验收人 | 架构师（签名）+ 传输与消息协议（协议语义） |
 
 ### 2.6 交互/UI 流程设计师
@@ -144,14 +144,14 @@
 | `Envelope` / `MsgType` | `:net-proto` | 传输与消息协议 | 架构师 | FROZEN | core、游戏协议（只读） |
 | `FrameCodec` | `:net-proto` | 传输与消息协议 | 架构师 | FROZEN | core |
 | `Transport` / `Listener` / `Connection` / `Endpoint` / `CloseReason` | `:net-core` | 传输与消息协议 | **架构师** | FROZEN | session、app（只读） |
-| `HELLO` / `WELCOME` / `REJECT` / `PING` / `PONG` / `BYE` 载荷 | `:net-proto` | 传输与消息协议 | 架构师 | FROZEN | 发现（只读） |
+| `HELLO` / `WELCOME` / `REJECT` / `JOIN_REQ` / `JOIN_OK` / `PING` / `PONG` / `BYE` / `KICK` / `ERROR` / `RESUME_REQ` / `LOBBY_REQ` / `LOBBY_RESULT` 载荷 | `:net-proto` | 传输与消息协议 | 架构师 | FROZEN | 发现（只读） |
 | `CMD` / `CMD_RESULT` / `EVENT_BATCH` / `SNAPSHOT` / `SYNC_HASH` **消息类型与信封** | `:net-proto` | 游戏数据流/协议设计师 | 架构师 | FROZEN | core、app（只读） |
 | 上述消息的**具体载荷字段**（schema 明细） | `:net-proto` | 游戏数据流/协议设计师 | 架构师 | **DRAFT** | — |
 | `GamePlugin` / `GameEvent` / `GameCommand` | `:game-api` | 游戏数据流/协议设计师 | **架构师** | FROZEN | core、game-* |
 | `Seat` / `Seats` / `PlayerMeta` / `RejectReason` | `:game-api` | 游戏数据流/协议设计师 | 架构师 | FROZEN | 全部上层 |
 | `ValidateResult` | `:game-api` | 游戏数据流/协议设计师 | 架构师 | FROZEN | core、game-* |
 | `SeededRandom` | `:game-api` | 游戏数据流/协议设计师 | 架构师 | FROZEN | game-* |
-| `RoomDescriptor` / `HostAddress` / `RoomPhase` | `:net-proto` | **架构师** | 架构师 | FROZEN | 发现、session、UI（只读） |
+| `RoomDescriptor` / `HostAddress` / `RoomPhase` / `RoomPlayer` | `:net-proto` | **架构师** | 架构师 | FROZEN | 发现、session、UI（只读） |
 | `RoomDiscovery` / `RoomAdvertiser` / `Advertisement` | `:net-core` | 服务发现与连接管理 | **架构师** | FROZEN | app |
 | `SessionState`（两端状态机） | `:net-core` | 游戏数据流/协议设计师 | **架构师** | FROZEN | UI 设计师、交互开发 |
 | `HostSession` / `GuestSession` 公开方法集 | `:net-core` | 游戏数据流/协议设计师 | **架构师** | FROZEN | app |
@@ -215,9 +215,15 @@
 grep -rn --include=*.kt -E "import (java\.net|javax\.net|android\.|com\.poria\.net)" game-*/
 #     期望：无输出
 
-# R3 UI 层不得直连传输层
-grep -rn --include=*.kt -E "import com\.poria\.net\.core\.transport" app/
-#     期望：无输出（只允许 import session 与 room 包）
+# R3 UI 层不得直连传输层（路径级；组合根 LanRuntime 豁免，见下方说明）
+grep -rn --include=*.kt -E "import com\.poria\.net\.core\.transport" app/ | grep -v -E "(LanRuntime\.kt|/runtime/)"
+#     期望：无输出（UI/VM 只允许 import session 与 room 包）
+#     豁免：LanRuntime.kt 与 app/.../runtime/** —— 组合根必须能 new TcpTransport，
+#           且豁免处只允许 import Transport / TcpTransport / CloseReason 三个类型
+
+# R5 会话层不得绕过 FrameCodec 直接操作帧
+grep -rn --include=*.kt -E "com\.poria\.net\.proto\.frame\.(FrameIo|FrameHeader)" net-core/src/main/kotlin/com/poria/net/core/session/
+#     期望：无输出（解码唯一入口是 FrameCodec；否则将来加压缩/分片会出现第二条解码路径）
 
 # R4 插件不得使用非确定性来源
 grep -rn --include=*.kt -E "import kotlin\.random|Math\.random|System\.currentTimeMillis" game-*/
