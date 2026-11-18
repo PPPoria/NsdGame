@@ -1,0 +1,7 @@
+<resources>
+    <!--
+      应用主题：只继承 base 提供的 Theme.Base，需要定制就往下加 item。
+      不要在 base 里改主题，那是所有 app 共享的。
+    -->
+    <style name="Theme.NsdGames" parent="Theme.Base" />
+</resources>

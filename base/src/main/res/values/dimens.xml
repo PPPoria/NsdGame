@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      命名规则：按语义而不是按数值（原来的 text_size_3h / 2h / hb / 2b / 5b 猜不出大小）。
+      需要平板/横屏专属尺寸时，新建 values-sw600dp/dimens.xml 覆盖同名 item 即可。
+    -->
+
+    <!-- 间距：xs < s < m < l < xl -->
+    <dimen name="space_xs">4dp</dimen>
+    <dimen name="space_s">6dp</dimen>
+    <dimen name="space_m">10dp</dimen>
+    <dimen name="space_l">20dp</dimen>
+    <dimen name="space_xl">30dp</dimen>
+
+    <!-- 圆角，与 bg_corner_* 保持一致 -->
+    <dimen name="corner_s">6dp</dimen>
+    <dimen name="corner_m">12dp</dimen>
+    <dimen name="corner_l">24dp</dimen>
+
+    <!-- 字号 -->
+    <dimen name="text_caption">11sp</dimen>
+    <dimen name="text_label">15sp</dimen>
+    <dimen name="text_body">19sp</dimen>
+    <dimen name="text_subtitle">23sp</dimen>
+    <dimen name="text_title">29sp</dimen>
+
+    <!-- 抬升 / 投影层级 -->
+    <dimen name="elevation_low">4dp</dimen>
+    <dimen name="elevation_high">8dp</dimen>
+</resources>

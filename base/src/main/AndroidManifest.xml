@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  库模块不需要 applicationId，namespace 在 build.gradle.kts 里声明。
+  保留这个空清单是为了以后有地方放 <queries>、provider、必要的权限合并信息。
+-->
+<manifest />

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 6dp 圆角。底色用主题色（?attr/colorSurface），不要写死 #FFFFFF，否则暗色模式下是白块。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="@dimen/corner_s" />
+    <solid android:color="?attr/colorSurface" />
+</shape>

@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">茯苓游戏</string>
+    <string name="hello_placeholder">Ready.</string>
+    <string name="hello_clicked">Nice.</string>
+</resources>

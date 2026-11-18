@@ -1,0 +1,11 @@
+<resources>
+    <!--
+      库模块只提供「主题基座」，不提供完整的 app 主题。
+      app 模块这样继承：
+          <style name="Theme.NsdGames" parent="Theme.Base" />
+      需要改主色/暗色时在 app 里覆盖 item，不要回头改 base。
+
+      parent 用 Material3.DayNight：暗色适配自动跟随系统，不需要再单独写 values-night。
+    -->
+    <style name="Theme.Base" parent="Theme.Material3.DayNight.NoActionBar" />
+</resources>

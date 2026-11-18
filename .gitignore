@@ -1,0 +1,20 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Kotlin 2.x 会在项目根生成 .kotlin 目录
+.kotlin/
+# 各模块的构建产物
+**/build/
