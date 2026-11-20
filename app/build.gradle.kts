@@ -50,6 +50,10 @@ dependencies {
     implementation(project(":base"))
     // 显式声明：app 直接用 UnoEngine / UnoState / UnoAi
     implementation(project(":core"))
+    implementation(libs.androidx.appcompat)
+    implementation(libs.material)
+    implementation(libs.androidx.activity)
+    implementation(libs.androidx.constraintlayout)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

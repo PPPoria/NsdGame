@@ -1,17 +1,3 @@
 <resources>
     <string name="app_name">茯苓游戏</string>
-
-    <!-- 首页 -->
-    <string name="menu_subtitle">单机 UNO 先跑起来，联网以后再说</string>
-    <string name="action_start_uno">开始 UNO</string>
-
-    <!-- 对局 -->
-    <string name="action_draw">摸牌</string>
-    <string name="action_pass">过牌</string>
-    <string name="action_new_game">重开</string>
-    <string name="uno_choose_color">万能牌：选一个颜色</string>
-    <string name="uno_your_turn">轮到你出牌（手牌 %1$d 张）</string>
-    <string name="uno_ai_turn">电脑 %1$d 出牌中…</string>
-    <string name="uno_you_win">你赢了！</string>
-    <string name="uno_ai_win">电脑 %1$d 先出完了</string>
 </resources>
