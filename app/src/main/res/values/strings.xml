@@ -1,3 +1,27 @@
 <resources>
     <string name="app_name">茯苓游戏</string>
+
+    <!-- 房间列表页 -->
+    <string name="rooms_title">局域网聊天</string>
+    <string name="rooms_hint">同一个 WiFi 下，别人的房间会自动出现在下面</string>
+    <string name="rooms_nickname_hint">你的昵称</string>
+    <string name="rooms_create">创建房间</string>
+    <string name="rooms_searching">正在搜索房间…</string>
+    <string name="rooms_empty">还没发现房间\n在另一台设备点「创建房间」，或者先自己开一间</string>
+    <string name="rooms_status">正在搜索同一个 WiFi 下的房间…（找到 %1$d 个）</string>
+    <string name="room_item_host">%1$s · 点击加入</string>
+    <string name="default_nickname">玩家%1$d</string>
+    <string name="chat_room_of">%1$s的房间</string>
+
+    <!-- 聊天室页 -->
+    <string name="chat_title">聊天室</string>
+    <string name="chat_leave">离开</string>
+    <string name="chat_message_hint">说点什么…</string>
+    <string name="chat_send">发送</string>
+    <string name="chat_members">%1$d 人在房间里：%2$s</string>
+    <string name="chat_nobody">房间里还没有别人</string>
+    <string name="chat_connecting">连接中…</string>
+    <string name="chat_online_host">房主 · 在线</string>
+    <string name="chat_online">在线</string>
+    <string name="chat_closed">已断开</string>
 </resources>

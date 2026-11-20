@@ -56,6 +56,9 @@ dependencies {
     implementation(libs.material)
     implementation(libs.androidx.activity)
     implementation(libs.androidx.constraintlayout)
+    // 两个页面都用 RecyclerView（房间列表 / 聊天气泡）。虽然 Material 会传递依赖它，
+    // 但代码里直接用的类必须显式声明，不然哪天 Material 改依赖就莫名编译不过。
+    implementation(libs.androidx.recyclerview)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

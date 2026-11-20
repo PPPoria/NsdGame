@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?><!--
+  外层 LinearLayout 只负责"靠左还是靠右"（gravity 在适配器里按 mine 设置），
+  lint 会嫌它多余，但去掉就得在代码里改 FrameLayout.LayoutParams，不划算。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:paddingTop="3dp"
+    android:paddingBottom="3dp"
+    tools:ignore="UselessParent">
+
+    <LinearLayout
+        android:id="@+id/bubble"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_bubble_other"
+        android:orientation="vertical"
+        android:paddingStart="12dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp">
+
+        <TextView
+            android:id="@+id/textSender"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/textMessage"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:maxWidth="240dp"
+            android:textSize="15sp" />
+    </LinearLayout>
+
+</LinearLayout>
