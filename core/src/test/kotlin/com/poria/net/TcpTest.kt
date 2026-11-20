@@ -4,28 +4,28 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
 import java.net.ServerSocket
 import java.net.Socket
-import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
 /**
  * 真开 socket 的集成测试：全部走 127.0.0.1，不需要模拟器。
  *
- * 每个回调都塞进队列，测试线程再从队列里"等"，所以既不会忙等也不会假通过。
+ * 包括房主自己那条回环连接——它和远端客人走的是同一条路径。
  */
 class TcpTest {
 
     private val servers = mutableListOf<TcpServer>()
-    private val clients = mutableListOf<TcpClient>()
+    private val peers = mutableListOf<Peer>()
 
     @After
     fun tearDown() {
-        clients.forEach { it.close() }
+        peers.forEach { it.close() }
         servers.forEach { it.stop() }
     }
 
@@ -33,35 +33,34 @@ class TcpTest {
 
     @Test
     fun `客户端连上来能双向收发`() {
-        val serverEvents = ServerEvents()
+        val serverEvents = RecordingListener()
         val server = startServer(serverEvents)
         assertTrue("端口 0 应该由系统分配一个真端口", server.localPort > 0)
 
-        val clientEvents = ClientEvents()
-        val client = newClient(server.localPort, clientEvents)
-        client.connect()
+        val clientEvents = RecordingListener()
+        val client = connect(server.localPort, clientEvents)
 
-        val peer = serverEvents.opened.next("服务端 onPeerOpen")
+        val peer = serverEvents.opened.next("服务端 onOpen")
         clientEvents.opened.next("客户端 onOpen")
         assertTrue(peer.isOpen)
         assertEquals(1, server.peers().size)
 
-        client.send("我是玩家 2")
+        assertTrue(client.send("我是玩家 2"))
         assertEquals("我是玩家 2", serverEvents.lines.next("服务端收到消息"))
 
-        peer.send("欢迎上车 🎴")
+        assertTrue(peer.send("欢迎上车 🎴"))
         assertEquals("欢迎上车 🎴", clientEvents.lines.next("客户端收到消息"))
     }
 
     @Test
     fun `多个客户端连同一个服务端时广播发给所有人`() {
-        val serverEvents = ServerEvents()
+        val serverEvents = RecordingListener()
         val server = startServer(serverEvents)
 
-        val first = ClientEvents()
-        val second = ClientEvents()
-        newClient(server.localPort, first).connect()
-        newClient(server.localPort, second).connect()
+        val first = RecordingListener()
+        val second = RecordingListener()
+        connect(server.localPort, first)
+        connect(server.localPort, second)
         serverEvents.opened.next("第一个连接")
         serverEvents.opened.next("第二个连接")
         assertEquals(2, server.peers().size)
@@ -74,27 +73,24 @@ class TcpTest {
 
     @Test
     fun `同一个连接连发多条，顺序不变`() {
-        val serverEvents = ServerEvents()
+        val serverEvents = RecordingListener()
         val server = startServer(serverEvents)
-        val client = newClient(server.localPort, ClientEvents())
-        client.connect()
-        serverEvents.opened.next("服务端 onPeerOpen")
+        val client = connect(server.localPort, RecordingListener())
+        serverEvents.opened.next("服务端 onOpen")
 
         val sent = (1..50).map { "第 $it 手" }
         sent.forEach { assertTrue(client.send(it)) }
 
-        val received = List(sent.size) { serverEvents.lines.next("第 ${it + 1} 条消息") }
-        assertEquals(sent, received)
+        assertEquals(sent, List(sent.size) { serverEvents.lines.next("第 ${it + 1} 条消息") })
     }
 
     @Test
     fun `接近上限的大消息也能过`() {
-        val serverEvents = ServerEvents()
+        val serverEvents = RecordingListener()
         val server = startServer(serverEvents)
-        val clientEvents = ClientEvents()
-        val client = newClient(server.localPort, clientEvents)
-        client.connect()
-        val peer = serverEvents.opened.next("服务端 onPeerOpen")
+        val clientEvents = RecordingListener()
+        val client = connect(server.localPort, clientEvents)
+        val peer = serverEvents.opened.next("服务端 onOpen")
 
         val big = "牌".repeat(Wire.MAX_LINE_BYTES / 4) // 每字 3 字节，留足余量
         assertTrue(client.send(big))
@@ -104,37 +100,53 @@ class TcpTest {
         assertEquals(big, clientEvents.lines.next("客户端收到大消息"))
     }
 
+    // ── 房主自己那条回环连接 ────────────────────────────────────────────────
+
+    @Test
+    fun `房主用回环连自己的服务端，和远端客人没有区别`() {
+        val serverEvents = RecordingListener()
+        val server = startServer(serverEvents)
+
+        // 房主玩家用的就是客人那个函数，只是 IP 写 127.0.0.1
+        val hostPlayer = RecordingListener()
+        val hostPeer = connect(server.localPort, hostPlayer)
+        val peer = serverEvents.opened.next("服务端 onOpen")
+
+        assertEquals("房主那条连接的对端就是本机", "127.0.0.1", peer.remoteHost)
+        assertTrue("房主出牌也走 Peer.send", hostPeer.send("PLAY|red|5"))
+        assertEquals("PLAY|red|5", serverEvents.lines.next("服务端收到房主的操作"))
+
+        assertEquals("广播也要回到房主自己手上", 1, server.broadcast("STATE|轮到座位 1"))
+        assertEquals("STATE|轮到座位 1", hostPlayer.lines.next("房主收到广播"))
+    }
+
     // ── 断开 ────────────────────────────────────────────────────────────────
 
     @Test
     fun `客户端主动断开时两边各回调一次`() {
-        val serverEvents = ServerEvents()
+        val serverEvents = RecordingListener()
         val server = startServer(serverEvents)
-        val clientEvents = ClientEvents()
-        val client = newClient(server.localPort, clientEvents)
-        client.connect()
-        serverEvents.opened.next("服务端 onPeerOpen")
+        val clientEvents = RecordingListener()
+        val client = connect(server.localPort, clientEvents)
+        serverEvents.opened.next("服务端 onOpen")
 
         client.close()
 
         assertEquals("自己关的算 LOCAL", CloseCause.LOCAL, clientEvents.closed.next("客户端 onClosed").cause)
-        assertEquals("对面关的算 REMOTE", CloseCause.REMOTE, serverEvents.closed.next("服务端 onPeerClosed").cause)
+        assertEquals("对面关的算 REMOTE", CloseCause.REMOTE, serverEvents.closed.next("服务端 onClosed").cause)
 
-        // 断开之后 send 不再抛异常，只是明确告诉调用方"没发出去"
         assertFalse(client.isOpen)
         assertFalse(client.send("还有人在吗"))
-        // 服务端不该再收到消息
-        assertEquals(null, serverEvents.lines.poll(200, TimeUnit.MILLISECONDS))
+        assertNull("服务端不该再收到消息", serverEvents.lines.poll(200, TimeUnit.MILLISECONDS))
     }
 
     @Test
     fun `服务端 stop 会把所有连接都断掉`() {
-        val serverEvents = ServerEvents()
+        val serverEvents = RecordingListener()
         val server = startServer(serverEvents)
-        val clientEvents = ClientEvents()
-        val client = newClient(server.localPort, clientEvents)
-        client.connect()
-        serverEvents.opened.next("服务端 onPeerOpen")
+        val clientEvents = RecordingListener()
+        val client = connect(server.localPort, clientEvents)
+        serverEvents.opened.next("服务端 onOpen")
 
         server.stop()
 
@@ -147,15 +159,15 @@ class TcpTest {
 
     @Test
     fun `一端发超长的一行会被当作协议错误断开`() {
-        val serverEvents = ServerEvents()
+        val serverEvents = RecordingListener()
         val server = startServer(serverEvents)
 
-        // 绕过 TcpClient 直接下脏数据：模拟"对面的实现写错了/有人乱连"
+        // 绕过 Tcp.connect 直接下脏数据：模拟"对面的实现写错了/有人乱连"
         Socket("127.0.0.1", server.localPort).use { raw ->
             raw.getOutputStream().write(ByteArray(Wire.MAX_LINE_BYTES + 10) { 'x'.code.toByte() })
             raw.getOutputStream().flush()
 
-            val closed = serverEvents.closed.next("服务端 onPeerClosed")
+            val closed = serverEvents.closed.next("服务端 onClosed")
             assertEquals(CloseCause.ERROR, closed.cause)
             assertNotNull("断开原因要能看见", closed.reason)
         }
@@ -168,19 +180,19 @@ class TcpTest {
         // 先占用一个端口再放掉，端口号短期内不会再被分出去
         val deadPort = ServerSocket(0).use { it.localPort }
         assertThrows(IOException::class.java) {
-            TcpClient("127.0.0.1", deadPort, ClientEvents()).connect(timeoutMs = 1_000)
+            Tcp.connect("127.0.0.1", deadPort, RecordingListener(), timeoutMs = 1_000)
         }
     }
 
     @Test
     fun `重复 start 会拒绝，不会偷偷起两个 accept 线程`() {
-        val server = startServer(ServerEvents())
+        val server = startServer(RecordingListener())
         assertThrows(IllegalStateException::class.java) { server.start() }
     }
 
     @Test
     fun `广播会先挡掉本机写错的消息`() {
-        val server = startServer(ServerEvents())
+        val server = startServer(RecordingListener())
         assertThrows(IllegalArgumentException::class.java) { server.broadcast("两行\n消息") }
         assertThrows(IllegalArgumentException::class.java) {
             server.broadcast("x".repeat(Wire.MAX_LINE_BYTES + 1))
@@ -189,58 +201,9 @@ class TcpTest {
 
     // ── 夹具 ────────────────────────────────────────────────────────────────
 
-    private fun startServer(events: ServerEvents): TcpServer =
+    private fun startServer(events: RecordingListener): TcpServer =
         TcpServer(port = 0, listener = events).start().also { servers += it }
 
-    private fun newClient(port: Int, events: ClientEvents): TcpClient =
-        TcpClient("127.0.0.1", port, events).also { clients += it }
-
-    private class ServerEvents : TcpServer.Listener {
-        val opened = LinkedBlockingQueue<Peer>()
-        val lines = LinkedBlockingQueue<String>()
-        val closed = LinkedBlockingQueue<Closed>()
-        val down = LinkedBlockingQueue<String>()
-
-        override fun onPeerOpen(peer: Peer) {
-            opened += peer
-        }
-
-        override fun onPeerLine(peer: Peer, line: String) {
-            lines += line
-        }
-
-        override fun onPeerClosed(peer: Peer, cause: CloseCause, reason: String?) {
-            closed += Closed(cause, reason)
-        }
-
-        override fun onServerDown(reason: String, error: Throwable?) {
-            down += reason
-        }
-    }
-
-    private class ClientEvents : TcpClient.Listener {
-        val opened = LinkedBlockingQueue<TcpClient>()
-        val lines = LinkedBlockingQueue<String>()
-        val closed = LinkedBlockingQueue<Closed>()
-
-        override fun onOpen(client: TcpClient) {
-            opened += client
-        }
-
-        override fun onLine(client: TcpClient, line: String) {
-            lines += line
-        }
-
-        override fun onClosed(client: TcpClient, cause: CloseCause, reason: String?) {
-            closed += Closed(cause, reason)
-        }
-    }
-
-    private fun <T> LinkedBlockingQueue<T>.next(what: String): T {
-        val value = poll(3, TimeUnit.SECONDS)
-        assertNotNull("3 秒内没等到 $what", value)
-        return value!!
-    }
+    private fun connect(port: Int, events: RecordingListener): Peer =
+        Tcp.connect("127.0.0.1", port, events).also { peers += it }
 }
-
-private data class Closed(val cause: CloseCause, val reason: String?)

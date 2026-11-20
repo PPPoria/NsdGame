@@ -34,4 +34,9 @@ kotlin {
 dependencies {
     // api：FoundHost 的 host/port 要直接喂给 core 的 TcpClient，下游不用再单独声明 :core
     api(project(":core"))
+
+    // ServiceDiscovery 用 channel + 挂起 for 循环把"一次只解析一个"交给结构化并发，
+    // 省掉 pending 队列 + resolving 标志位。注意：只有这一个模块用协程，
+    // :core 的 socket 层刻意保持零依赖（阻塞写，天然背压）。
+    implementation(libs.kotlinx.coroutines.android)
 }

@@ -9,40 +9,23 @@ import java.util.concurrent.atomic.AtomicInteger
  * 局域网对局的"房主"：监听一个端口，把每条进来的连接变成一个 [Peer]。
  *
  * ```
- * val server = TcpServer(0, listener).start()   // 0 = 让系统挑一个空闲端口
- * advertise(server.localPort)                   // 把这个端口通过 NSD 广播出去（见 :app-net）
+ * val server = TcpServer(0, session).start()          // 0 = 让系统挑一个空闲端口
+ * advertise(server.localPort)                         // 把这个端口通过 NSD 广播出去（见 :app-net）
+ * val me = Tcp.connect("127.0.0.1", server.localPort, hostPlayer) // 房主自己走回环连上来
  * ...
  * server.stop()
  * ```
  *
- * 线程：[start] 之后固定 1 条 accept 线程 + 每条连接 1 条读线程；回调线程见 [Peer]。
+ * 房主那条连接和远端客人走**完全一样**的路径，区别只是 IP 是 `127.0.0.1`。代价是每方向
+ * 几 KB 内核缓冲 + 几个系统调用；换来的是只有一条链路要维护。
+ *
+ * 线程：[start] 之后固定 1 条 accept 线程 + 每条连接 1 条读线程；回调线程见 [PeerListener]。
  */
 class TcpServer(
     /** 想监听的端口。默认 0 = 系统分配，真实端口看 [localPort]。 */
     private val port: Int = 0,
-    private val listener: Listener,
+    private val listener: PeerListener,
 ) {
-
-    /**
-     * 服务端事件。所有方法都有空实现：下游只关心哪个就覆盖哪个。
-     *
-     * ⚠️ 回调里别抛异常、别做耗时活：它跑在那条连接的读线程上，抛出去会打断读线程
-     * （Android 上未捕获异常还会带走整个进程）。连接本身会被收干净并补一次
-     * [onPeerClosed]（`cause = ERROR`）。
-     */
-    interface Listener {
-        /** 新连接已可用（可以立刻 [Peer.send]），发生在任何 [onPeerLine] 之前。 */
-        fun onPeerOpen(peer: Peer) {}
-
-        /** 收到一条消息。同一条连接的消息按发送顺序、在同一条线程上到达。 */
-        fun onPeerLine(peer: Peer, line: String) {}
-
-        /** 连接断开，每条连接只回调一次。 */
-        fun onPeerClosed(peer: Peer, cause: CloseCause, reason: String?) {}
-
-        /** accept 循环挂了（一般是本机网络异常），随后服务已停止。正常情况下不会触发。 */
-        fun onServerDown(reason: String, error: Throwable?) {}
-    }
 
     private val lock = Any()
     private val peers = LinkedHashMap<Int, Peer>()
@@ -86,7 +69,7 @@ class TcpServer(
     }
 
     /**
-     * 给所有连接发同一条消息。
+     * 给所有连接发同一条消息（包括房主自己那条回环连接）。
      *
      * @return 真正发出去的条数（断掉的不算）
      * @throws IllegalArgumentException 消息含换行或超长（本机代码 bug）
@@ -103,7 +86,7 @@ class TcpServer(
         }
         boundPort = -1
         socket?.let { runCatching { it.close() } }
-        // 每条连接的 onPeerClosed(LOCAL) 由各自的读线程回调
+        // 每条连接的 onClosed(LOCAL) 由各自的读线程回调
         peers().forEach { it.close() }
     }
 
@@ -127,11 +110,11 @@ class TcpServer(
                     remoteHost = accepted.inetAddress?.hostAddress ?: "unknown",
                     remotePort = accepted.port,
                     socket = accepted,
-                    onOpen = listener::onPeerOpen,
-                    onLine = listener::onPeerLine,
+                    onOpen = listener::onOpen,
+                    onLine = listener::onLine,
                     onClosed = { p, cause, reason ->
                         synchronized(lock) { peers.remove(p.id) }
-                        listener.onPeerClosed(p, cause, reason)
+                        listener.onClosed(p, cause, reason)
                     },
                 )
             } catch (e: IOException) {
@@ -140,7 +123,7 @@ class TcpServer(
                 continue
             }
 
-            // 先入表再起读线程：保证 onPeerOpen 里 broadcast 时自己也已经在表里
+            // 先入表再起读线程：保证 onOpen 里 broadcast 时自己也已经在表里
             synchronized(lock) { peers[peer.id] = peer }
             NetThreads.execute(peer::pump)
         }

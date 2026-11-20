@@ -8,18 +8,21 @@ import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * 一条已经连上的连接。服务端每条进来的连接一个，客户端只有一个。
+ * 一条已经连上的连接。
  *
- * 线程约定（下游只要记住这一句）：
- * **onOpen → onLine… → onClosed 全部在同一条读线程上按序回调**，所以在回调里处理消息
- * 不用加锁；[send] 可以从任意线程调（内部有写锁）。
+ * **一类连接，两种来源**：远端客人（[TcpServer] 收进来的 socket）和房主自己
+ * （`Tcp.connect("127.0.0.1", localPort, …)`）都是这个类型、走同一条代码路径，
+ * 所以会话/UI 里不该出现"我是房主所以走另一条路"的分支。
  *
- * 不要自己 new：由 [TcpServer] / [TcpClient] 创建并起好读线程。
+ * 线程约定：`onOpen → onLine… → onClosed` 全部在同一条读线程上按序回调，[send] 可以从
+ * 任意线程调（内部有写锁）。
+ *
+ * 不要自己 new：由 [TcpServer] / [Tcp.connect] 创建并起好读线程。
  */
 class Peer internal constructor(
-    /** 服务端内自增的连接号；客户端固定为 0。只用来打日志/做 map key。 */
+    /** 服务端内自增的连接号。客户端那条固定为 0，只用来打日志/做 map key。 */
     val id: Int,
-    /** 对端 IP。 */
+    /** 对端 IP。房主自己那条是 `127.0.0.1`。 */
     val remoteHost: String,
     /** 对端端口。 */
     val remotePort: Int,
@@ -42,7 +45,7 @@ class Peer internal constructor(
         private set
 
     /**
-     * 发一条消息（会被 [Wire] 加上 `'\n'`）。
+     * 发一条消息（由 [Wire] 补上 `'\n'`）。
      *
      * @return `false` 表示没发出去（连接已断）；此时**不要重试**，
      *   `onClosed` 会（或已经）被回调一次，按它处理就行。
@@ -56,7 +59,7 @@ class Peer internal constructor(
         } catch (e: IOException) {
             // 写挂了只关 socket，**不在这里回调 onClosed**：回调统一由读线程发，
             // 下游收到的 onOpen/onLine/onClosed 顺序才是可信的。
-            shutdownSocket()
+            shutdown()
             false
         }
     }
@@ -68,10 +71,10 @@ class Peer internal constructor(
      */
     fun close() {
         closeRequested = true
-        shutdownSocket()
+        shutdown()
     }
 
-    /** 读线程体。由 [TcpServer] / [TcpClient] 丢进 [NetThreads]，不要自己调。 */
+    /** 读线程体。由 [TcpServer] / [Tcp] 丢进 [NetThreads]，不要自己调。 */
     internal fun pump() {
         if (finished.get()) return
         try {
@@ -98,11 +101,11 @@ class Peer internal constructor(
             throw e
         } finally {
             // 兜底：不管走哪条路都不留半开的 socket
-            shutdownSocket()
+            shutdown()
         }
     }
 
-    private fun shutdownSocket() {
+    private fun shutdown() {
         isOpen = false
         runCatching { socket.close() }
     }
@@ -110,7 +113,7 @@ class Peer internal constructor(
     private fun finish(cause: CloseCause, reason: String?) {
         // 只回调一次：close()、读线程、send 失败三条路都往这里汇
         if (!finished.compareAndSet(false, true)) return
-        shutdownSocket()
+        shutdown()
         onClosed(this, cause, reason)
     }
 }

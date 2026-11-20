@@ -13,16 +13,16 @@ core/                     纯 Kotlin 内核，零 Android 依赖
     UnoAction.kt          Play / Draw / Pass + IllegalMove
     UnoEngine.kt          ★ 全部规则：出牌合法性、跳过/反转/罚牌、摸牌、洗牌重发、胜负
     UnoAi.kt              电脑玩家（贪心，不搜索）
-  src/main/kotlin/com/poria/net/          ★ 联网用的 socket 通信（纯 JVM，本机就能测）
+  src/main/kotlin/com/poria/net/          ★ 联网通信（纯 JVM，本机就能测）
     Wire.kt               行协议：一条消息 = 一行 UTF-8 + '\n'，单条上限 8KB
     Peer.kt               一条连接：收发 + 一条读线程，回调按序
+    PeerListener.kt       连接事件 onOpen/onLine/onClosed——房主 UI 和客人 UI 用同一个接口
     TcpServer.kt          房主：监听端口，广播给所有连接
-    TcpClient.kt          客人：连上去
+    Tcp.kt                客户端：Tcp.connect(host, port, listener) 拿到一条 Peer
     CloseCause.kt         LOCAL / REMOTE / ERROR，决定要不要重连
   src/test/kotlin/com/poria/
-    uno/UnoEngineTest.kt  规则单测 + AI 自对弈一整局
     net/WireTest.kt       行协议单测
-    net/TcpTest.kt        127.0.0.1 上真开 socket 的收发/断开/坏包测试
+    net/TcpTest.kt        127.0.0.1 上真开 socket 的收发/断开/坏包/房主回环测试
 
 app-net/                  局域网发现（NSD/mDNS），只有两个类
   src/main/java/com/poria/netnsd/
@@ -49,15 +49,46 @@ app/                      唯一的应用模块
 ```
 ServiceDiscovery/ServiceAdvertiser  只知道"服务名 + IP + 端口"（Android NSD）
         ↓ FoundHost(host, port)
-TcpServer/TcpClient                 只知道"连上、发一行、收一行"（纯 JVM socket）
-        ↓ String
-GameSession / UnoEngine             只知道"规则"（纯 Kotlin）
+TcpServer / Tcp.connect             只知道"连上、发一行、收一行"（纯 JVM socket）
+        ↓ Peer（房主和客人拿到的是同一个类型）
+Session / UnoEngine                 只知道"规则"（纯 Kotlin）
 ```
+
+## 房主自己也是一个客户端（走回环）
+
+房主手机既是 Host（权威状态 + `TcpServer`），也是玩家。**不要让 UI 直接读 Host 的状态**，
+否则会出现"两份真相""本机能跑联机就炸""房主权限散在 UI 里"。正确形状：
+
+```
+房主手机：
+  TcpServer ──┬── 远端客人（LAN socket）
+              └── 房主自己（127.0.0.1 回环，同一个 Tcp.connect）
+                    ↓ 都是一条普通 Peer
+  session / UI（和客人走完全同一条 send → 校验 → 广播 路径）
+```
+
+```kotlin
+// 房主
+val server = TcpServer(0, session).start()
+val me = Tcp.connect("127.0.0.1", server.localPort, hostPlayer)  // 和客人同一个函数
+advertise(server.localPort)
+
+// 客人
+val host = Tcp.connect(ip, port, guestSession)
+```
+
+"房主特权"（开局、踢人）是**服务端侧的策略**：Host 记住每个连接的角色，收到命令时校验发送方，
+而不是让房主 UI 绕过连接去改状态。房主退出 = 服务端消失（房间解散）；权威转移明确不做。
+
+**房主那条连接为什么不走内存管道**：做过，又撤了。省下的是每方向几 KB 内核缓冲和几个
+系统调用，代价是多一条链路（管道阻塞语义、关闭语义、背压上限）要跟 socket 对齐并长期维护。
+回合制消息量下这点开销可以忽略，**一条代码路径更值钱**。所以房主出牌和客人出牌在服务端
+眼里完全一样，`TcpTest` 里有一条 `房主用回环连自己的服务端，和远端客人没有区别` 盯着这件事。
 
 ## 跑起来
 
 ```bash
-./gradlew :core:test          # 规则 + socket 单测，几秒跑完，不需要模拟器
+./gradlew :core:test          # 行协议 + 真 socket 测试，几秒跑完，不需要模拟器
 ./gradlew :app:assembleDebug  # 打包 APK
 ```
 
@@ -69,7 +100,8 @@ GameSession / UnoEngine             只知道"规则"（纯 Kotlin）
 | 状态里有哪些字段 | `core/.../UnoState.kt` |
 | 电脑怎么出牌 | `core/.../UnoAi.kt` |
 | 消息怎么切（分隔符、长度上限） | `core/.../net/Wire.kt` |
-| 谁连谁、连接/广播/断开 | `core/.../net/TcpServer.kt`、`TcpClient.kt`、`Peer.kt` |
+| 谁连谁、连接/广播/断开 | `core/.../net/TcpServer.kt`、`Tcp.kt`、`Peer.kt` |
+| 房主自己怎么连自己 | `Tcp.connect("127.0.0.1", server.localPort, hostPlayer)`，没有特殊代码 |
 | 房间怎么被局域网发现 | `app-net/.../ServiceAdvertiser.kt`、`ServiceDiscovery.kt` |
 | 牌桌长什么样 | `app/.../ui/UnoTableView.kt` |
 | 点了牌之后干什么 | `app/.../ui/UnoActivity.kt` |
@@ -97,10 +129,16 @@ GameSession / UnoEngine             只知道"规则"（纯 Kotlin）
 
 ## 联网分三层，别越界
 
-- `:core` 的 `com.poria.net` **只搬字符串**：不认识 UNO，不认识 Android。消息体是 JSON 还是
+- `:core` 的 `com.poria.net` **只搬字符串**：不认识 UNO，不认识 Android，**也不引协程**
+  （阻塞写 = 天然背压；换 channel 就得回答"队列满了丢哪条消息"）。消息体是 JSON 还是
   `PLAY|red|5` 都由上层决定，这一层只管"一行一条、收发、断开"。
-- `:app-net` **只回答"对方 IP 是多少"**：不建连接、不发消息、不碰 UI。
-- 线程：`TcpServer.start` / `TcpClient.connect` 是**阻塞**的，别在主线程调；
+- **一条链路，一个类型**：远端客人、房主自己（`127.0.0.1` 回环）都是 `Tcp.connect` 拿到的
+  `Peer`，`PeerListener` 也是同一个接口——**会话代码里不允许出现"这是房主所以走另一条路"的分支**，
+  那是这套设计唯一要守住的东西。省一个链路（内存管道）是刻意的：少一套要跟 socket 对齐的语义。
+- `:app-net` **只回答"对方 IP 是多少"**：不建连接、不发消息、不碰 UI。它是唯一用协程的
+  联网模块——用 `Channel` + 挂起 `for` 循环把"一次只解析一个服务"交给结构化并发，
+  省掉排队队列和状态标志位。
+- 线程：`TcpServer.start` / `Tcp.connect` 是**阻塞**的，别在主线程调；
   `ServiceAdvertiser` / `ServiceDiscovery` 的方法**必须**在主线程调（NsdManager 要 Looper）。
   `Peer` 的回调在那条连接的读线程上按序到达，NSD 的回调已经替你抛回主线程。
 
@@ -109,8 +147,9 @@ GameSession / UnoEngine             只知道"规则"（纯 Kotlin）
 - UNO 规则：不喊"UNO"罚牌、不做 +4 质疑、不计分、不打多局。
 - 界面：自绘无动画、无音效、手牌不拖拽（点一下出牌）。
 - 转屏靠 `android:configChanges` 不重开；真要横竖屏两套布局时再把状态搬进 ViewModel。
-- 联网：只有"行协议 socket + NSD 发现"这两块地基，**房间协议（谁当庄、断线重连、悔棋仲裁）没写**。
-  动手之前先看 `app-net/README.md` 里"已经替你处理掉的坑"。
+- 联网：只有"行协议 + socket + 房主回环 + NSD 发现"这几块地基，**房间协议（谁当庄、
+  断线重连、悔棋仲裁、房主权威转移）没写**。动手之前先看 `app-net/README.md` 里
+  "已经替你处理掉的坑"。
 
 ## 版本管理约定
 
