@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  库模块不需要 applicationId，namespace 在 build.gradle.kts 里声明。
+  NSD（mDNS 广播 + 搜索）要 INTERNET 权限；在这里声明，manifest merger 会合进 :app，
+  :app 自己的清单就不用再写一遍。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+</manifest>

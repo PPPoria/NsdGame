@@ -50,6 +50,8 @@ dependencies {
     implementation(project(":base"))
     // 显式声明：app 直接用 UnoEngine / UnoState / UnoAi
     implementation(project(":core"))
+    // 联网的房间发现：ServiceDiscovery / ServiceAdvertiser（顺带把 TcpServer / TcpClient 带进来）
+    implementation(project(":app-net"))
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
     implementation(libs.androidx.activity)
