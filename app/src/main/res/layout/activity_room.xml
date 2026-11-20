@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  游戏准备房间：上面是"这桌怎么摆"（房间名 / 座位 / 设置），中间是聊天，下面是动作栏。
+  所有内容都由服务端快照驱动（RoomState.snapshot），这个布局只管"摆在哪"。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    tools:context=".ui.RoomActivity">
+
+    <!-- 顶部：房间名 + 一行状态 + 离开 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/space_l"
+        android:paddingTop="@dimen/space_m"
+        android:paddingEnd="@dimen/space_s">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/textTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/room_title"
+                android:textSize="@dimen/text_subtitle"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/textSubtitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/room_connecting_short"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="@dimen/text_caption" />
+
+            <TextView
+                android:id="@+id/textStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="@dimen/text_caption" />
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/buttonLeave"
+            style="@style/RoomButton.Text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/room_leave" />
+    </LinearLayout>
+
+    <!-- 座位条：座位号 = 出手顺序，空位也画出来 -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/recyclerSeats"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:clipToPadding="false"
+        android:paddingStart="@dimen/space_l"
+        android:paddingTop="@dimen/space_s"
+        android:paddingEnd="@dimen/space_m"
+        android:paddingBottom="@dimen/space_xs" />
+
+    <TextView
+        android:id="@+id/textSeatsHint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="@dimen/space_l"
+        android:paddingEnd="@dimen/space_l"
+        android:paddingBottom="@dimen/space_s"
+        android:textColor="?attr/colorOnSurfaceVariant"
+        android:textSize="@dimen/text_caption"
+        tools:text="点座位可以调座次、请人离开" />
+
+    <!-- 聊天 -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/recyclerMessages"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:paddingStart="@dimen/space_m"
+        android:paddingTop="@dimen/space_xs"
+        android:paddingEnd="@dimen/space_m"
+        android:paddingBottom="@dimen/space_xs" />
+
+    <!-- 输入行 -->
+    <LinearLayout
+        android:id="@+id/rowInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="bottom"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/space_l"
+        android:paddingTop="@dimen/space_xs"
+        android:paddingEnd="@dimen/space_l">
+
+        <EditText
+            android:id="@+id/editMessage"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@drawable/bg_field"
+            android:hint="@string/room_message_hint"
+            android:importantForAutofill="no"
+            android:inputType="textCapSentences|textMultiLine"
+            android:maxLength="300"
+            android:maxLines="3"
+            android:paddingStart="@dimen/space_m"
+            android:paddingTop="@dimen/space_s"
+            android:paddingEnd="@dimen/space_m"
+            android:paddingBottom="@dimen/space_s"
+            android:textSize="@dimen/text_label" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/buttonSend"
+            style="@style/RoomButton.Tonal"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/space_s"
+            android:text="@string/room_send" />
+    </LinearLayout>
+
+    <!-- 动作栏：设置 / 准备 / 开始（房主看到设置 + 开始，客人看到设置 + 准备） -->
+    <LinearLayout
+        android:id="@+id/rowActions"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/space_l"
+        android:paddingTop="@dimen/space_s"
+        android:paddingEnd="@dimen/space_l"
+        android:paddingBottom="@dimen/space_m">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/buttonSettings"
+            style="@style/RoomButton.Outlined"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="@dimen/space_s"
+            android:layout_weight="1"
+            android:text="@string/room_settings" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/buttonReady"
+            style="@style/RoomButton.Tonal"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="@dimen/space_s"
+            android:layout_weight="1"
+            android:text="@string/room_ready" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/buttonStart"
+            style="@style/RoomButton.Filled"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/room_start" />
+    </LinearLayout>
+
+</LinearLayout>

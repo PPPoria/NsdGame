@@ -2,6 +2,14 @@
     <!--
       应用主题：只继承 base 提供的 Theme.Base，需要定制就往下加 item。
       不要在 base 里改主题，那是所有 app 共享的。
+
+      座位条的四个颜色（见 attrs.xml）：有人坐的用 surfaceVariant，空位用 surface，
+      自己的座位用主题色描边——圆角和间距一律取 base 的 dimens。
     -->
-    <style name="Theme.NsdGames" parent="Theme.Base" />
+    <style name="Theme.NsdGames" parent="Theme.Base">
+        <item name="roomSeatSurfaceOccupied">?attr/colorSurfaceVariant</item>
+        <item name="roomSeatSurfaceEmpty">?attr/colorSurface</item>
+        <item name="roomSeatStroke">?attr/colorOutlineVariant</item>
+        <item name="roomSeatStrokeMine">?attr/colorPrimary</item>
+    </style>
 </resources>

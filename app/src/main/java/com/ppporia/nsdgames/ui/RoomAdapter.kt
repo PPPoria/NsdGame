@@ -41,8 +41,10 @@ class RoomAdapter(private val onClick: (FoundHost) -> Unit) :
         fun bind(item: FoundHost) {
             room = item
             binding.textRoomName.text = item.serviceName
-            binding.textRoomHost.text =
-                binding.root.context.getString(R.string.room_item_host, "${item.host}:${item.port}")
+            binding.textRoomHost.text = binding.root.context.getString(
+                R.string.room_item_subtitle,
+                "${item.host}:${item.port}",
+            )
         }
     }
 

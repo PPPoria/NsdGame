@@ -3,7 +3,7 @@
 两块东西：
 
 1. **找到对方**：`ServiceAdvertiser` / `ServiceDiscovery`（NSD/mDNS）。
-2. **对上话**：`chat/` 下的聊天协议、房间规则、会话（把 `:core` 的 socket 缝起来）。
+2. **对上话**：`room/` 下的房间协议、房间规则、会话（把 `:core` 的 socket 缝起来）。
 
 不搬字节（那在 `:core`），不碰界面（那在 `:app`）。
 
@@ -26,47 +26,60 @@
 | `ServiceAdvertiser` | 广播"我开了房间"（注册 NSD 服务，带上 TCP 端口） | 房主 |
 | `ServiceDiscovery` | 搜"谁开了房间"，回调里给出 IP + 端口 | 想加别人房间的人 |
 | `FoundHost` | 一条搜索结果：`serviceName` / `host` / `port` | 上面两个的公共数据 |
-| `NSD_SERVICE_TYPE` | 服务类型串 `_nsdgames._tcp.`，两边必须一致 | 两边 |
+| `NSD_SERVICE_TYPE` | 服务类型串 `_ppporiagames._tcp.`，两边必须一致 | 两边 |
 
 ## 房间：协议 / 规则 / 会话
 
 | 类 | 干什么 | 测得了吗 |
 |---|---|---|
-| `chat/ChatProtocol` | 行协议编解码：`JOIN` / `SAY` → `WELCOME` / `JOINED` / `LEFT` / `LOG` / `ERROR` | ✅ JVM 单测 |
-| `chat/ChatRoom` | 房主侧规则：分座位、拒绝重名/满员、决定广播给谁。**不碰 socket**（只收一个 `send` 回调） | ✅ JVM 单测 |
-| `chat/ChatSession` | 把 `TcpServer` + NSD 广播 + 回环客户端 + `ChatRoom` 缝起来，对外只有 `state` / `say` / `close` | ❌ 要真机 |
-| `chat/ChatState` | UI 要渲染的不可变状态（阶段 / 花名册 / 消息 / 提示） | — |
+| `room/RoomProtocol` | 行协议编解码：命令（JOIN/SAY/READY/SEAT/SWAP/SIZE/GAME/OPT/KICK/START）、事件（SNAP/ERROR/BYE）、快照编解码与超预算裁剪 | ✅ JVM 单测 |
+| `room/Room` | 房主侧规则：分座位、排座次、改人数、换游戏、玩法开关、准备、踢人、开局校验。**不碰 socket**（每个成员只给 `send`/`close` 回调） | ✅ JVM 单测 |
+| `room/RoomSession` | 把 `TcpServer` + NSD 广播 + 回环客户端 + `Room` 缝起来，对外只有 `state` + 一串命令方法 | ❌ 要真机 |
+| `room/RoomState` | UI 要渲染的东西：本机连接状态（CONNECTING/ONLINE/CLOSED）+ 服务端快照（`RoomSnapshot`） | — |
 
 ```kotlin
 // 房主
-val session = ChatSession.host(context, "小明" + "的房间", "小明")
-session.state.collect { render(it) }        // 主线程收
+val session = RoomSession.host(context, "小明的房间", "小明")
+session.state.collect { render(it) }        // 主线程收，里面就有整份快照
 session.say("开一局？")
+session.setReady(true)
 session.close()                             // 必须在主线程（要注销 NSD 广播）
 
 // 加入
-val session = ChatSession.guest(foundHost, "小红")
+val session = RoomSession.guest(foundHost, "小红")
 ```
 
-协议长这样（**自由文本永远是最后一个字段**，所以内容里带 `|` 也不会切错；**只认座位不认昵称**）：
+## 协议：只有快照，没有增量事件
 
 ```
-客户端 → 服务端    JOIN|<昵称>              SAY|<内容>
-服务端 → 客户端    WELCOME|<座位>|<房名>     JOINED|<座位>|<昵称>
-                   LEFT|<座位>               LOG|<座位>|<内容>
-                   ERROR|<原因>
+客户端 → 服务端    JOIN|<playerId>|<昵称>    SAY|<内容>       READY|<0|1>
+                  SEAT|<座位>               SWAP|<a>|<b>     SIZE|<人数>
+                  GAME|<游戏id>             OPT|<玩法>|<0|1>  KICK|<playerId>  START
+
+服务端 → 客户端    SNAP|<整份快照>           ERROR|<原因>      BYE|<原因>
 ```
 
-一条重要的约定：`LOG` 会广播给**所有人，包括发送者**。客户端不做本地回显，
-所以"我发的"和"别人发的"在序列里只有一份真相，顺序不会岔。
+两条重要的约定：
+
+1. **`SNAP` 广播给所有人，包括发起者**。客户端不做本地回显、不做本地推演，
+   所以花名册/座次/设置永远只有服务端这一份真相（旧版"客户端自己攒 JOINED/LEFT"的做法已经删了）。
+2. **`playerId` 由客户端生成**。服务端认可后就是身份，座位是可变的、身份不变；
+   客户端因此不用等"你被分到几号"就知道快照里哪一行是自己。
+
+快照是一行 `键=值`，值里的 `% | ; , =` 和换行都转义（`RoomProtocol.esc/unesc`），
+所以昵称/房名/聊天内容里带任何分隔符都不会切错。单行上限 8KB（`Wire`），
+快照目标 6KB——**超了先丢最老的聊天**，人和设置一条不少。
 
 ## 房主：开局 + 广播
 
 ```kotlin
-val session = ChatSession.host(this, "小明的房间", "小明")
+val session = RoomSession.host(this, "小明的房间", "小明")
 // 上面一行内部做的事（不用你写）：TcpServer(0) 绑端口 → NSD 广播那个端口
 //                                → Tcp.connect("127.0.0.1", 端口) 让房主自己入座
 ```
+
+房主身份是**服务端认的**：`127.0.0.1` 回环连上来的那条连接在 `Room` 里带 `host` 标记，
+改设置/踢人/开局都按它校验。客户端自称"我是房主"没有用。
 
 ## 加入：搜索 + 连接
 
@@ -79,10 +92,10 @@ val discovery = ServiceDiscovery(context, object : ServiceDiscovery.Listener {
 discovery.start()   // 主线程；想重扫只能 stop() 再 start()
 
 // 用户点了某个房间之后
-val session = ChatSession.guest(room, "小红")
+val session = RoomSession.guest(room, "小红")
 ```
 
-房主和客人拿到的是**同一个 `ChatSession` 形状**（`state` / `say` / `close`），UI 只有一份。
+房主和客人拿到的是**同一个 `RoomSession` 形状**（`state` + 命令方法 + `close`），UI 只有一份。
 
 ## 已经替你处理掉的坑
 
@@ -106,18 +119,20 @@ val session = ChatSession.guest(room, "小红")
 ## 依赖
 
 本模块用 `kotlinx-coroutines-android`（本来就在允许列表里，`:app` 也早就带着它）：一处是发现层的
-resolve 收集协程，一处是 `ChatSession` 的后台建房间/连接。**`:core` 的 socket 层刻意不引协程**：
+resolve 收集协程，一处是 `RoomSession` 的后台建房间/连接。**`:core` 的 socket 层刻意不引协程**：
 那里 `send()` 是阻塞写，慢对端自然形成背压；换成 channel 就得回答"队列满了丢哪条消息"，
 丢一条聊天/出牌消息是没法诊断的 bug。
 
 ## 必须记住的约束
 
-1. `ServiceAdvertiser` / `ServiceDiscovery` / `ChatSession.close()` **只能在主线程调用**；
-   反过来 `TcpServer.start` / `Tcp.connect` 是**阻塞**的，别在主线程调（`ChatSession` 已经放进协程）。
+1. `ServiceAdvertiser` / `ServiceDiscovery` / `RoomSession.close()` **只能在主线程调用**；
+   反过来 `TcpServer.start` / `Tcp.connect` 是**阻塞**的，别在主线程调（`RoomSession` 已经放进协程）。
 2. 一个进程里不要同时开两个实例广播同一个服务（`FAILURE_ALREADY_ACTIVE`）。
-3. `ServiceDiscovery` / `ChatSession` 没单元测试（`NsdManager` 是 final 的 Android 类，JVM 侧测不了）。
+3. `ServiceDiscovery` / `RoomSession` 没单元测试（`NsdManager` 是 final 的 Android 类，JVM 侧测不了）。
    所以这两处的原则是**把状态压到最少**：`ServiceDiscovery` 只剩 3 个字段
    （`discoveryListener` / `inbox` / `job`，外加主线程独占的 `known`），全都能用 `stopInternal()`
    一次收干净；改这里时先数一遍字段，多一个就得说清"它为什么不能由 cancel 管"。
-4. 能测的都往 `ChatProtocol` / `ChatRoom` 里放：它们不碰 socket、不碰 Android，
+4. 能测的都往 `RoomProtocol` / `Room` 里放：它们不碰 socket、不碰 Android，
    `./gradlew :app-net:test` 秒跑。加功能时先想"能不能变成这两个类里的纯逻辑"。
+5. **客户端不存房间状态**：`RoomSession` 里没有花名册、没有座位表，只有"最近一份快照"。
+   要展示新东西，就把它加进 `RoomSnapshot`（服务端算好再推），别在客户端加推导。

@@ -13,6 +13,9 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.NsdGames">
         <activity
+            android:name=".ui.azul.AzulDesktopActivity"
+            android:exported="false" />
+        <activity
             android:name=".ui.RoomsActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:exported="true">
@@ -24,14 +27,14 @@
         </activity>
         <!--
           adjustResize：键盘弹起时给窗口发 IME inset。
-          真正的内边距在 ChatActivity.onWindowInsetsChanged 里按 ime - systemBars 补，
+          真正的内边距在 RoomActivity.onWindowInsetsChanged 里按 ime - systemBars 补，
           避免和 BaseActivity 已加的系统栏内边距叠加。
 
           configChanges：转屏不重建 Activity。重建会跑 onDestroy → session.close()，
           房主转个屏幕就把整屋人踢下线，不能接受。
         -->
         <activity
-            android:name=".ui.ChatActivity"
+            android:name=".ui.RoomActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:exported="false"
             android:parentActivityName=".ui.RoomsActivity"

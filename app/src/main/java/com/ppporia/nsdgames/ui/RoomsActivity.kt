@@ -4,6 +4,7 @@ import androidx.core.view.isVisible
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.poria.base.ext.setOnClickListenerWithClickAnimation
 import com.poria.base.ui.BaseActivity
+import com.poria.core.game.GameCatalog
 import com.poria.netnsd.FoundHost
 import com.poria.netnsd.ServiceDiscovery
 import com.ppporia.nsdgames.R
@@ -15,7 +16,7 @@ import kotlinx.coroutines.awaitCancellation
  * 首页：搜房间 + 开房间。
  *
  * 搜索只在页面可见时进行（NSD 没有"刷新"，只能 stop + start，`bindUi` 的 STARTED 生命周期正好对上）。
- * 这里不碰 socket 也不碰协议：点房间就是把 `FoundHost` 交给 [ChatActivity]。
+ * 这里不碰 socket 也不碰协议：点房间就是把 `FoundHost` 交给 [RoomActivity]。
  */
 class RoomsActivity : BaseActivity<ActivityRoomsBinding>() {
 
@@ -28,6 +29,11 @@ class RoomsActivity : BaseActivity<ActivityRoomsBinding>() {
     override fun initView() {
         binding.recyclerRooms.layoutManager = LinearLayoutManager(this)
         binding.recyclerRooms.adapter = adapter
+        // 游戏列表来自 :core 的 GameCatalog，加游戏时这里不用改
+        val games = GameCatalog.games.joinToString("、") { game ->
+            if (game.available) game.title else getString(R.string.rooms_game_wip, game.title)
+        }
+        binding.textGames.text = getString(R.string.rooms_games, games)
     }
 
     override fun initListener() {
@@ -88,11 +94,11 @@ class RoomsActivity : BaseActivity<ActivityRoomsBinding>() {
 
     private fun createRoom() {
         val name = nickname()
-        ChatActivity.startHost(this, roomName = getString(R.string.chat_room_of, name), playerName = name)
+        RoomActivity.startHost(this, roomName = getString(R.string.room_name_of, name), playerName = name)
     }
 
     private fun join(host: FoundHost) {
-        ChatActivity.startGuest(this, target = host, playerName = nickname())
+        RoomActivity.startGuest(this, target = host, playerName = nickname())
     }
 
     private fun nickname(): String =

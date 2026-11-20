@@ -1,27 +1,65 @@
 <resources>
     <string name="app_name">茯苓游戏</string>
 
-    <!-- 房间列表页 -->
-    <string name="rooms_title">局域网聊天</string>
-    <string name="rooms_hint">同一个 WiFi 下，别人的房间会自动出现在下面</string>
+    <!-- 首页 -->
+    <string name="rooms_title">局域网房间</string>
+    <string name="rooms_games">今天能开：%1$s</string>
+    <string name="rooms_hint">同一个 WiFi 下，别人开的房间会自动出现在下面</string>
     <string name="rooms_nickname_hint">你的昵称</string>
     <string name="rooms_create">创建房间</string>
     <string name="rooms_searching">正在搜索房间…</string>
     <string name="rooms_empty">还没发现房间\n在另一台设备点「创建房间」，或者先自己开一间</string>
     <string name="rooms_status">正在搜索同一个 WiFi 下的房间…（找到 %1$d 个）</string>
-    <string name="room_item_host">%1$s · 点击加入</string>
+    <string name="rooms_game_wip">%1$s（开发中）</string>
+    <string name="room_item_subtitle">%1$s · 点击加入</string>
     <string name="default_nickname">玩家%1$d</string>
-    <string name="chat_room_of">%1$s的房间</string>
+    <string name="room_name_of">%1$s的房间</string>
 
-    <!-- 聊天室页 -->
-    <string name="chat_title">聊天室</string>
-    <string name="chat_leave">离开</string>
-    <string name="chat_message_hint">说点什么…</string>
-    <string name="chat_send">发送</string>
-    <string name="chat_members">%1$d 人在房间里：%2$s</string>
-    <string name="chat_nobody">房间里还没有别人</string>
-    <string name="chat_connecting">连接中…</string>
-    <string name="chat_online_host">房主 · 在线</string>
-    <string name="chat_online">在线</string>
-    <string name="chat_closed">已断开</string>
+    <!-- 游戏房间 -->
+    <string name="room_title">游戏房间</string>
+    <string name="room_leave">离开</string>
+    <string name="room_connecting_short">连接中…</string>
+    <string name="room_header">%1$s · %2$d/%3$d 人</string>
+    <string name="room_status_connecting">正在进房间…</string>
+    <string name="room_status_online">房间由房主同步，改动立刻推给所有人</string>
+    <string name="room_status_hostless">房主已经离开，设置锁上了</string>
+    <string name="room_status_closed">已断开</string>
+    <string name="room_message_hint">说点什么…</string>
+    <string name="room_send">发送</string>
+    <string name="room_settings">房间设置</string>
+    <string name="room_ready">我准备好了</string>
+    <string name="room_cancel_ready">取消准备</string>
+    <string name="room_start">开始游戏</string>
+    <string name="room_seat_no">%1$d 号位</string>
+    <string name="room_seat_empty">空位</string>
+    <string name="room_seat_host">房主</string>
+    <string name="room_seat_ready">已准备</string>
+    <string name="room_seat_waiting">等准备</string>
+    <string name="room_seats_hint_host">点座位可以调座次、请人离开；座位顺序就是出手顺序</string>
+    <string name="room_seats_hint_guest">点空座位可以坐过去</string>
+    <string name="room_seats_hint_readonly">房主可以调整座次</string>
+
+    <!-- 座位弹窗 -->
+    <string name="seat_title_occupied">%1$d 号位 · %2$s</string>
+    <string name="seat_title_empty">%1$d 号位 · 空位</string>
+    <string name="seat_desc_arrange">房主可以安排座次，座位顺序就是出手顺序</string>
+    <string name="seat_desc_view">座次由房主安排</string>
+    <string name="seat_desc_take">空座位可以直接坐过去</string>
+    <string name="seat_sit">我坐这里</string>
+    <string name="seat_swap_me">和我换座位</string>
+    <string name="seat_move_here">把「%1$s」挪到这里</string>
+    <string name="seat_kick">请「%1$s」离开</string>
+
+    <!-- 房间设置面板 -->
+    <string name="settings_title">房间设置</string>
+    <string name="settings_host_hint">你是房主：改完立刻同步给所有人</string>
+    <string name="settings_guest_hint">这些设置由房主决定</string>
+    <string name="settings_game">游戏</string>
+    <string name="settings_game_more">更多游戏还在路上</string>
+    <string name="settings_game_wip">「%1$s」的对局规则还在施工，可以先把座次和玩法定下来</string>
+    <string name="settings_size">牌桌人数</string>
+    <string name="settings_size_hint">座位顺序就是出手顺序，人没坐满也能坐</string>
+    <string name="settings_options">玩法</string>
+    <string name="settings_no_options">这个游戏还没有可调的玩法</string>
+    <string name="settings_note">改人数、换游戏、开关玩法都会清空所有人的「准备好」</string>
 </resources>

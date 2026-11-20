@@ -4,27 +4,39 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="16dp"
+    android:paddingStart="@dimen/space_l"
+    android:paddingTop="@dimen/space_l"
+    android:paddingEnd="@dimen/space_l"
+    android:paddingBottom="@dimen/space_m"
     tools:context=".ui.RoomsActivity">
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="@string/rooms_title"
-        android:textSize="24sp"
+        android:textSize="@dimen/text_title"
         android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/textGames"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="?attr/colorOnSurfaceVariant"
+        android:textSize="@dimen/text_caption"
+        tools:text="今天能开：花砖物语" />
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
+        android:layout_marginTop="@dimen/space_xs"
         android:text="@string/rooms_hint"
-        android:textSize="13sp" />
+        android:textColor="?attr/colorOnSurfaceVariant"
+        android:textSize="@dimen/text_caption" />
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
+        android:layout_marginTop="@dimen/space_l"
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
@@ -33,17 +45,24 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:background="@drawable/bg_field"
             android:hint="@string/rooms_nickname_hint"
             android:importantForAutofill="no"
             android:inputType="textPersonName"
             android:maxLength="12"
-            android:maxLines="1" />
+            android:maxLines="1"
+            android:paddingStart="@dimen/space_m"
+            android:paddingTop="@dimen/space_s"
+            android:paddingEnd="@dimen/space_m"
+            android:paddingBottom="@dimen/space_s"
+            android:textSize="@dimen/text_label" />
 
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/buttonCreate"
+            style="@style/RoomButton.Filled"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
+            android:layout_marginStart="@dimen/space_s"
             android:text="@string/rooms_create" />
     </LinearLayout>
 
@@ -51,9 +70,10 @@
         android:id="@+id/textStatus"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
+        android:layout_marginTop="@dimen/space_m"
         android:text="@string/rooms_searching"
-        android:textSize="13sp" />
+        android:textColor="?attr/colorOnSurfaceVariant"
+        android:textSize="@dimen/text_caption" />
 
     <TextView
         android:id="@+id/textEmpty"
@@ -62,16 +82,18 @@
         android:layout_weight="1"
         android:gravity="center"
         android:text="@string/rooms_empty"
-        android:textSize="14sp"
+        android:textColor="?attr/colorOnSurfaceVariant"
+        android:textSize="@dimen/text_label"
         android:visibility="gone" />
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/recyclerRooms"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="@dimen/space_s"
         android:layout_weight="1"
         android:clipToPadding="false"
-        android:paddingBottom="8dp" />
+        android:paddingTop="@dimen/space_xs"
+        android:paddingBottom="@dimen/space_s" />
 
 </LinearLayout>

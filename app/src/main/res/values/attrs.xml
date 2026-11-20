@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  座位条的配色。做成"应用自己的 attr"而不是在 Kotlin 里引用 Material 的 R.attr：
+  1. nonTransitiveRClass=true，拿库的 R 去取主题 attr 很不稳；
+  2. 颜色仍然来自主题（?attr/colorPrimary 之类），暗色模式自动跟着变；
+  3. 想换座位条的样子只改这里和 themes.xml。
+-->
+<resources>
+    <attr name="roomSeatSurfaceOccupied" format="color|reference" />
+    <attr name="roomSeatSurfaceEmpty" format="color|reference" />
+    <attr name="roomSeatStroke" format="color|reference" />
+    <attr name="roomSeatStrokeMine" format="color|reference" />
+</resources>

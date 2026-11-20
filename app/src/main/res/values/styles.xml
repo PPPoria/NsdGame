@@ -1,0 +1,30 @@
+<resources>
+    <!--
+      房间页用的一小组按钮样式：radius 全部取 :base 的 corner_m，
+      所以"圆角只有一个来源"，改 base 的 dimens 就是全局改风格。
+      平面简约 = 不要 elevation、不要阴影，靠色块和描边分层。
+    -->
+    <style name="RoomButton.Filled" parent="Widget.Material3.Button">
+        <item name="cornerRadius">@dimen/corner_m</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+    </style>
+
+    <style name="RoomButton.Tonal" parent="Widget.Material3.Button.TonalButton">
+        <item name="cornerRadius">@dimen/corner_m</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+    </style>
+
+    <style name="RoomButton.Outlined" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="cornerRadius">@dimen/corner_m</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+    </style>
+
+    <style name="RoomButton.Text" parent="Widget.Material3.Button.TextButton">
+        <item name="cornerRadius">@dimen/corner_m</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+    </style>
+</resources>

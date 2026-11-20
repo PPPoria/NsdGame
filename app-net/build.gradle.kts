@@ -36,10 +36,10 @@ dependencies {
     api(project(":core"))
 
     // ServiceDiscovery 用 channel + 挂起 for 循环把"一次只解析一个"交给结构化并发，
-    // 省掉 pending 队列 + resolving 标志位；ChatSession 也用它做后台建房间/连接。
+    // 省掉 pending 队列 + resolving 标志位；RoomSession 也用它做后台建房间/连接。
     // 注意：只有这一个模块用协程，:core 的 socket 层刻意保持零依赖（阻塞写，天然背压）。
     implementation(libs.kotlinx.coroutines.android)
 
-    // ChatProtocol / ChatRoom 不碰 Android，用普通 JUnit 在 JVM 上直接测
+    // RoomProtocol / Room 不碰 Android，用普通 JUnit 在 JVM 上直接测
     testImplementation(libs.junit)
 }

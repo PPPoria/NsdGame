@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?><!-- 输入框：圆角取 base 的 corner_m，底色跟主题走（暗色模式自动适配） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="@dimen/corner_m" />
+    <solid android:color="?attr/colorSurfaceVariant" />
+</shape>

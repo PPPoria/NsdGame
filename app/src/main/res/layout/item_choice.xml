@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?><!-- 设置面板里的一个单选项（游戏 / 人数），由代码按目录和快照生成 -->
+<RadioButton xmlns:android="http://schemas.android.com/apk/res/android"
+    style="@style/Widget.Material3.CompoundButton.RadioButton"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:layout_marginEnd="@dimen/space_m"
+    android:minWidth="0dp"
+    android:paddingStart="0dp"
+    android:paddingEnd="0dp"
+    android:textSize="@dimen/text_label" />

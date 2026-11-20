@@ -1,0 +1,97 @@
+package com.poria.netnsd.room
+
+/**
+ * 服务端推给客户端的**权威快照**：房间里的一切（谁在、坐哪、选了哪个游戏、怎么玩、聊天记录）。
+ *
+ * 客户端**只渲染它，不做本地推演**：点按钮只是发命令，等这份快照回来才动界面。
+ * 这样"花名册/座次/设置"永远只有一份真相——服务端那份。
+ */
+data class RoomSnapshot(
+    val version: Int = RoomProtocol.VERSION,
+    val roomName: String,
+    /** 房主的 playerId；空串 = 房间里暂时没有房主（房主那条连接断了）。 */
+    val hostId: String,
+    val phase: RoomPhase,
+    val gameId: String,
+    /** 牌桌座位数（含空座）。座次就是将来的出牌顺序。 */
+    val tableSize: Int,
+    /**
+     * 服务端算好的"现在还开不了局"的原因；空串 = 现在就能开始。
+     *
+     * 客户端**只负责显示**（比如显示在"开始游戏"按钮上），不自己再判一遍规则。
+     */
+    val startHint: String = "",
+    /** 自定义玩法开关：optionId → 开/关。 */
+    val options: Map<String, Boolean>,
+    /** 按座位排序。 */
+    val players: List<RoomPlayer>,
+    /** 聊天记录（按 seq 递增）。快照太大时服务端会先丢最老的几条。 */
+    val messages: List<RoomMessage>,
+) {
+
+    /** 能不能开局。服务端说了算（[startHint] 为空且还在房间里）。 */
+    val canStart: Boolean get() = phase == RoomPhase.LOBBY && startHint.isEmpty()
+
+    fun player(id: String): RoomPlayer? = players.firstOrNull { it.id == id }
+
+    fun playerAt(seat: Int): RoomPlayer? = players.firstOrNull { it.seat == seat }
+
+    val host: RoomPlayer? get() = players.firstOrNull { it.host }
+}
+
+data class RoomPlayer(
+    /** 客户端自己生成、服务端认可的身份，连接期间不变（座位会变，它不变）。 */
+    val id: String,
+    val seat: Int,
+    val name: String,
+    val host: Boolean,
+    val ready: Boolean,
+)
+
+data class RoomMessage(
+    /** 服务端自增序号：UI 用它做列表 diff，内容相同的两条也不会被合并。 */
+    val seq: Int,
+    val playerId: String,
+    val text: String,
+)
+
+/** 房间本身处在哪个阶段。现在只会是 [LOBBY]——对局规则还没写。 */
+enum class RoomPhase { LOBBY, PLAYING }
+
+/** 本机这条连接的状态。**注意**：它不是房间状态，房间状态全在 [RoomSnapshot] 里。 */
+enum class SessionPhase {
+    /** 正在开房 / 正在连别人。 */
+    CONNECTING,
+
+    /** 收到过至少一份快照，可以操作了。 */
+    ONLINE,
+
+    /** 连接断了、被拒了、被踢了。页面该提示/退出。 */
+    CLOSED,
+}
+
+/**
+ * UI 要渲染的东西 = 本机连接状态 + 服务端快照。
+ *
+ * `myId` 是本机自己生成的（[RoomProtocol.join] 报给服务端），所以客户端不用等服务端
+ * "告诉我我是谁"就能知道快照里哪一行是自己。
+ */
+data class RoomState(
+    /** 是不是本机开的房。只影响文案；能不能改设置由快照里的 [RoomSnapshot.hostId] 决定。 */
+    val host: Boolean = false,
+    val phase: SessionPhase = SessionPhase.CONNECTING,
+    val myId: String = "",
+    val snapshot: RoomSnapshot? = null,
+    /** 给用户看的一句提示：连接失败、被拒绝、被踢、服务端的错误。 */
+    val note: String? = null,
+) {
+
+    val online: Boolean get() = phase == SessionPhase.ONLINE
+
+    val myPlayer: RoomPlayer? get() = snapshot?.player(myId)
+
+    /** 我是不是这间房的房主——由服务端快照说了算，不是本机自己猜的。 */
+    val iAmHost: Boolean get() = snapshot != null && myId.isNotEmpty() && snapshot.hostId == myId
+
+    val iAmReady: Boolean get() = myPlayer?.ready == true
+}
