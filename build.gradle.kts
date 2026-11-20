@@ -5,4 +5,6 @@ plugins {
     alias(libs.plugins.android.library) apply false
     alias(libs.plugins.kotlin.android) apply false
     alias(libs.plugins.kotlin.jvm) apply false
+    // 只有 :app-net 的房间协议用得上（@Serializable），其它模块不引
+    alias(libs.plugins.kotlin.serialization) apply false
 }

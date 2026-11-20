@@ -45,6 +45,8 @@ class Room(roomName: String) {
         val close: () -> Unit,
         var seat: Int,
         var ready: Boolean = false,
+        /** 头像的内容 id；空串 = 没设。**房间只存 id，图片本体在 BlobStore 里。** */
+        var avatar: String = "",
     )
 
     val roomName: String = sanitizeRoom(roomName)
@@ -56,7 +58,7 @@ class Room(roomName: String) {
 
     private var game: GameInfo = GameCatalog.games.first()
     private var tableSize: Int = GameCatalog.defaultTableSize(game)
-    private var phase: RoomPhase = RoomPhase.LOBBY
+    private var phase: RoomPhase = RoomPhase.Lobby
     private val options = LinkedHashMap<String, Boolean>().apply {
         putAll(GameCatalog.defaultOptions(game))
     }
@@ -133,10 +135,34 @@ class Room(roomName: String) {
     fun setReady(playerId: String, ready: Boolean): String? {
         synchronized(lock) {
             val member = members[playerId] ?: return "你不在房间里了"
-            if (phase != RoomPhase.LOBBY) return "游戏已经开始了"
+            if (phase != RoomPhase.Lobby) return "游戏已经开始了"
             if (member.ready == ready) return null
 
             member.ready = ready
+            broadcastLocked()
+            return null
+        }
+    }
+
+    // ── 头像 ────────────────────────────────────────────────────────────────
+
+    /**
+     * 换头像。**没有对应的客户端命令**：图片传完后由 [RoomSession] 调它，
+     * 因为"这个 id 的图真的已经收全了"只有会话层（拿着 [BlobStore] 的那层）知道。
+     *
+     * @param avatarId 内容 id（sha1）或 `builtin:` 素材 id；空串表示清掉头像
+     */
+    fun setAvatar(playerId: String, avatarId: String): String? {
+        val clean = avatarId.trim().take(RoomProtocol.MAX_BLOB_ID)
+        if (clean.isNotEmpty() && !BlobStore.isBuiltin(clean) && !BlobStore.isValidId(clean)) {
+            return "头像的内容 id 不合法"
+        }
+
+        synchronized(lock) {
+            val member = members[playerId] ?: return "你不在房间里了"
+            if (member.avatar == clean) return null
+
+            member.avatar = clean
             broadcastLocked()
             return null
         }
@@ -148,7 +174,7 @@ class Room(roomName: String) {
     fun takeSeat(playerId: String, seat: Int): String? {
         synchronized(lock) {
             val member = members[playerId] ?: return "你不在房间里了"
-            if (phase != RoomPhase.LOBBY) return "游戏已经开始了，不能换座"
+            if (phase != RoomPhase.Lobby) return "游戏已经开始了，不能换座"
             if (seat !in 0 until tableSize) return "没有 $seat 号座位"
             if (member.seat == seat) return null
             if (members.values.any { it.seat == seat }) return "那个座位有人了"
@@ -163,7 +189,7 @@ class Room(roomName: String) {
     fun swapSeats(playerId: String, a: Int, b: Int): String? {
         synchronized(lock) {
             hostOnly(playerId)?.let { return it }
-            if (phase != RoomPhase.LOBBY) return "游戏已经开始了，不能换座"
+            if (phase != RoomPhase.Lobby) return "游戏已经开始了，不能换座"
             if (a == b) return null
             if (a !in 0 until tableSize || b !in 0 until tableSize) return "座位号超出牌桌人数"
 
@@ -182,7 +208,7 @@ class Room(roomName: String) {
     fun setTableSize(playerId: String, size: Int): String? {
         synchronized(lock) {
             hostOnly(playerId)?.let { return it }
-            if (phase != RoomPhase.LOBBY) return "游戏已经开始了"
+            if (phase != RoomPhase.Lobby) return "游戏已经开始了"
             if (size !in game.minPlayers..game.maxPlayers) {
                 return "「${game.title}」只能 ${game.minPlayers}–${game.maxPlayers} 人"
             }
@@ -202,7 +228,7 @@ class Room(roomName: String) {
     fun selectGame(playerId: String, gameId: String): String? {
         synchronized(lock) {
             hostOnly(playerId)?.let { return it }
-            if (phase != RoomPhase.LOBBY) return "游戏已经开始了"
+            if (phase != RoomPhase.Lobby) return "游戏已经开始了"
             val picked = GameCatalog.byId(gameId) ?: return "没有这个游戏：$gameId"
             if (picked.id == game.id) return null
             if (members.size > picked.maxPlayers) return "「${picked.title}」最多 ${picked.maxPlayers} 人"
@@ -221,7 +247,7 @@ class Room(roomName: String) {
     fun setOption(playerId: String, optionId: String, on: Boolean): String? {
         synchronized(lock) {
             hostOnly(playerId)?.let { return it }
-            if (phase != RoomPhase.LOBBY) return "游戏已经开始了"
+            if (phase != RoomPhase.Lobby) return "游戏已经开始了"
             if (GameCatalog.option(game.id, optionId) == null) return "「${game.title}」没有这个玩法"
             if (options[optionId] == on) return null
 
@@ -254,12 +280,12 @@ class Room(roomName: String) {
      * 房主：开始游戏。校验顺序是"人数够 → 所有人都准备好"，都过了以后才轮到规则本身。
      *
      * 现在规则还没写（`GameInfo.available == false`），所以最后一步返回的是一句提示——
-     * **这里就是将来接对局的地方**：把 return 换成 `phase = PLAYING` + 广播即可。
+     * **这里就是将来接对局的地方**：把 return 换成 `phase = RoomPhase.Playing` + 广播即可。
      */
     fun start(playerId: String): String? {
         synchronized(lock) {
             hostOnly(playerId)?.let { return it }
-            if (phase != RoomPhase.LOBBY) return "已经开始了"
+            if (phase != RoomPhase.Lobby) return "已经开始了"
 
             val hint = startHintLocked()
             if (hint.isNotEmpty()) return hint
@@ -282,7 +308,7 @@ class Room(roomName: String) {
      * 房主真按了「开始」也是走 [start]，两处用的是同一个函数。
      */
     private fun startHintLocked(): String {
-        if (phase != RoomPhase.LOBBY) return "已经开始了"
+        if (phase != RoomPhase.Lobby) return "已经开始了"
         val missing = game.minPlayers - members.size
         if (missing > 0) return "还差 $missing 人"
         val waiting = members.values.filter { !it.host && !it.ready }
@@ -326,7 +352,7 @@ class Room(roomName: String) {
         startHint = startHintLocked(),
         options = LinkedHashMap(options),
         players = members.values.sortedBy { it.seat }.map { member ->
-            RoomPlayer(member.id, member.seat, member.name, member.host, member.ready)
+            RoomPlayer(member.id, member.seat, member.name, member.host, member.ready, member.avatar)
         },
         messages = messages.toList(),
     )

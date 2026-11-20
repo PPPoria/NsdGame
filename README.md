@@ -30,10 +30,12 @@ app-net/                  局域网层：发现（NSD）+ 房间（快照协议 
     Nsd.kt                服务类型串 + FoundHost
     ServiceAdvertiser.kt  广播"我开了房间"+ TCP 端口
     ServiceDiscovery.kt   搜"谁开了房间" → FoundHost(ip, port)（resolve 单飞队列）
-    room/RoomProtocol.kt  ★ 房间协议：命令 + **整份快照**（SNAP）+ ERROR / BYE
+    room/RoomProtocol.kt  ★ 房间协议：命令 / 整份快照 / ERROR / BYE / 图片分块，负载是 JSON（@Serializable）
     room/Room.kt          ★ 房主侧规则：座位/座次/玩法/准备/踢人/开局（不碰 socket，可直接测）
     room/RoomSession.kt   ★ 把三者缝起来：StateFlow<RoomState> + 一串"发命令"的方法
     room/RoomState.kt     UI 要渲染的东西：本机连接状态 + 服务端快照（RoomSnapshot）
+    room/BlobStore.kt     ★ 图片仓库：内容寻址（sha1）、分块拼装、hash 校验、LRU 配额
+    room/BlobSender.kt    ★ 把一份图分块发给一个 peer（3KB 一块，不卡房间）
   src/test/java/com/poria/netnsd/room/   协议往返 + 快照裁剪 + 房间规则单测（JVM 直接跑）
   （详见 app-net/README.md）
 
@@ -44,13 +46,14 @@ base/                     Android 基础设施（可复用的，跟游戏无关�
 
 app/                      唯一的应用模块：只有 UI
   src/main/java/com/ppporia/nsdgames/
-    ui/RoomsActivity.kt   首页：昵称 + 创建房间 + 搜到的房间列表（RecyclerView）
+    ui/RoomsActivity.kt   首页：头像 + 昵称 + 创建房间 + 搜到的房间列表（头像/昵称存 DataStore，输入防抖）
     ui/RoomActivity.kt    游戏准备房间（房主与客人共用同一个页面）
     ui/RoomAdapter.kt     房间列表适配器
-    ui/SeatAdapter.kt     座位条：座位号 = 出手顺序
+    ui/SeatAdapter.kt     座位条：座位号 = 出手顺序（有头像就画头像）
     ui/MessageAdapter.kt  聊天列表（自己的靠右、别人的靠左带昵称）
     ui/RoomSettingsSheet.kt  底部弹出的房间设置（选游戏 / 牌桌人数 / 玩法开关）
     ui/SeatSheet.kt       点座位弹出的动作面板（入座 / 换座 / 请人离开）
+    ui/Avatars.kt         头像处理：居中裁正方形 + 缩到 ≤512px + WebP（选中图后预览/编码）
 ```
 
 依赖方向：`:app` → `:base` → `:core`，以及 `:app` → `:app-net` → `:core`。反向依赖编译不过。
@@ -106,13 +109,11 @@ val host = Tcp.connect(ip, port, guestSession)
 
 ```
 客户端 → 服务端（只是"请求"，能不能改由 Room 说了算）
-  JOIN|<playerId>|<昵称>   SAY|<内容>     READY|<0|1>
-  SEAT|<座位>              SWAP|<a>|<b>   SIZE|<人数>
-  GAME|<游戏id>            OPT|<玩法id>|<0|1>  KICK|<playerId>  START
+  CMD|<命令的 JSON>     type = join / say / ready / seat / swap / size / game / option / kick / start
 
 服务端 → 客户端
-  SNAP|<整份快照>          ERROR|<原因>（那条命令没生效）
-  BYE|<原因>（这条连接被关掉：满员 / 被踢 / 房间解散）
+  SNAP|<整份快照的 JSON>      ERROR|<JSON 字符串>（那条命令没生效）
+  BYE|<JSON 字符串>（这条连接被关掉：满员 / 被踢 / 房间解散）
 ```
 
 三条设计决定，改协议前先想清楚：
@@ -129,11 +130,35 @@ val host = Tcp.connect(ip, port, guestSession)
 空串 = 能开）、玩法开关、按座位排序的玩家（id / 座位 / 昵称 / 是否房主 / 是否准备）、聊天记录。
 **`startHint` 由服务端算**，客户端拿它显示在「开始游戏」按钮上，不重复判一遍规则。
 
-快照是一行 `键=值`，值里出现的 `% | ; , =` 和换行都会被转义（`RoomProtocol.esc/unesc`），
-所以昵称、房名、聊天内容里带任何分隔符都不会切错。单行有 8KB 上限，**超预算时从最老的聊天
-开始丢**——人和设置一条不少。
+**负载是 JSON**（kotlinx.serialization，`@Serializable` 数据类）：`RoomSnapshot` / `RoomCommand`
+就是线上那一份，没有手写的字段拼接和转义表，昵称/房名/聊天里带 `|`、引号、反斜杠都不怕；
+加字段只改数据类（`ignoreUnknownKeys` 保证新旧版本不会互相炸）。快照整行仍有 8KB 上限，
+**超预算时从最老的聊天开始丢**——人和设置一条不少（JSON 比手写格式多几十字节/条，聊天能留的条数会少一点）。
 
 上限（`RoomProtocol`）：昵称 12、内容 300、房名 24、playerId 16、错误 80 字符；快照目标 6KB。
+
+## 图片（头像 / 自定义砖块纹理）
+
+图片走**同一条连接、分块、点对点**，三条消息就够：
+
+```
+上传（设置自己的头像）   CMD|{"type":"blobPut","id":<sha1>,"index":0,"total":14,"data":"<base64>"}
+下载（要别人的图）       CMD|{"type":"blobRequest","id":<sha1>}
+房主发回来               BLOB|<BlobChunkFrame>        BLOB_ERR|<原因>
+```
+
+- **快照里只有 id**（`sha1(图片)` 的十六进制，或 `builtin:` 开头的打包素材），没有字节：
+  50 张图不会乘上房间人数；`builtin:` 的图根本不过网，UI 直接从 APK 资源加载。
+- **一块 3KB**（base64 后 4KB、一行约 4.2KB）：单次阻塞写只有几毫秒，图片传输期间聊天/快照
+  最多排在当前这块后面；**不经过房间锁**（`RoomSession` 把它丢进自己的 IO 协程）。
+- **内容寻址**：id 就是内容，房主同一张图只存一份、同一张图全屋只传一次；客户端按 id 落盘
+  （房主 `filesDir`、客人 `cacheDir`），配额 64MB LRU，重开房间还能命中。
+- **上传完成才提交**：最后一块收到且 sha1 对得上，房主才把 avatarId 写进快照广播——
+  别人看到头像时图一定已经拉得到。上传失败会收到 `BLOB_ERR`，客户端的发送循环自己停。
+- 客户端发图前请先缩到 **≤512px** 再编码（512px WebP/JPEG 一般 20–60KB ≈ 10–20 块）。
+
+实现：`BlobStore`（内容寻址 + 分块拼装 + hash 校验 + 配额）、`BlobSender`（逐块发给一个 peer）、
+`RoomSession.uploadAvatar/requestBlob/blobFile`。
 
 ## 座位 / 玩法 / 游戏目录
 
@@ -149,8 +174,9 @@ val host = Tcp.connect(ip, port, guestSession)
 
 `START` 现在会过完"人数够、都准备好了"的校验，然后返回一句
 「花砖物语的对局还在施工」。接游戏的步骤在 `docs/room-reference.md` 第 7 节，
-一句话版：在 `Room.start()` 里把 `return` 换成 `phase = PLAYING` + 广播，
-再按 `RoomProtocol` 的同一套"命令 → 规则 → 快照"形状加对局命令。
+一句话版：在 `Room.start()` 里把 `return` 换成 `phase = RoomPhase.Playing` + 广播，
+再按 `RoomProtocol` 的同一套"命令 → 规则 → 快照"形状加对局命令（命令和快照都只是
+`@Serializable` 数据类加一个 `@SerialName`）。
 
 ## 跑起来
 
@@ -183,8 +209,10 @@ val host = Tcp.connect(ip, port, guestSession)
 1. 只有 `:core` / `:base` / `:app-net` / `:app` 四个模块，**禁止新增模块**。
    分模块的唯一理由永远是"依赖不同"：`:core` 不碰 Android（所以 `:core:test` 秒跑），
    `:app-net` 必须碰 Android（`NsdManager`），`:base` 是界面基建。说不清跟谁"依赖不同"就别拆。
-2. **禁止新增依赖**。现在只有 AndroidX 基础库、Material、kotlinx-coroutines；
-   socket 用 JDK 自带的 `java.net`，网络发现用系统的 `android.net.nsd`，都不引库。
+2. **依赖只许这几样**：AndroidX 基础库、Material、kotlinx-coroutines，外加**唯一一个例外**
+   `kotlinx-serialization-json`（只给 `:app-net` 的房间协议用：快照/命令都是 `@Serializable`
+   数据类）。socket 用 JDK 自带的 `java.net`，网络发现用系统的 `android.net.nsd`，
+   除此之外不引库；`:core` 仍然零依赖。
 3. 禁止 Hilt / Koin / Dagger、RxJava、EventBus、Room、Navigation。
 4. 禁止"只有一个实现的接口"、禁止 UseCase / Repository / Mapper 分层、禁止自己写 DI 容器。
    （`TcpServer.Listener` / `ServiceDiscovery.Listener` 这类回调接口不算：它们是给调用方覆盖的，不是拿来注入的。）
@@ -194,6 +222,8 @@ val host = Tcp.connect(ip, port, guestSession)
    客户端"先改本地再等服务端确认"是 bug（两份真相）。
 7. 新文件先按 200 行估一遍，超了就想想是不是在造框架。
 8. 每个功能一次做完再做下一个，不要预留"以后可能要"的扩展点。
+9. **图片不进快照**：快照里只放 id，字节走 `BLOB` 分块；一块 ≤3KB（base64 后 ~4.2KB），
+   别把 8KB 行上限当"传输容量"用——分块才是不堵别人的关键。
 
 审查时只问五句话：这个抽象有第二个实现吗？这个类能一句话说清职责吗？新增依赖了吗？
 规则判定有没有散到 UI / 网络里？客户端是不是又在偷偷存状态？
@@ -201,8 +231,8 @@ val host = Tcp.connect(ip, port, guestSession)
 ## 联网分三层，别越界
 
 - `:core` 的 `com.poria.net` **只搬字符串**：不认识游戏，不认识 Android，**也不引协程**
-  （阻塞写 = 天然背压；换 channel 就得回答"队列满了丢哪条消息"）。消息体是 JSON 还是
-  `PLAY|red|5` 都由上层决定，这一层只管"一行一条、收发、断开"。
+  （阻塞写 = 天然背压；换 channel 就得回答"队列满了丢哪条消息"）。消息体是什么格式
+  由上层决定（房间这边是 JSON），这一层只管"一行一条、收发、断开"。
 - **一条链路，一个类型**：远端客人、房主自己（`127.0.0.1` 回环）都是 `Tcp.connect` 拿到的
   `Peer`，`PeerListener` 也是同一个接口——**会话代码里不允许出现"这是房主所以走另一条路"的分支**。
 - `:app-net` 是**唯一能同时碰协程和 Android API** 的联网模块：NSD 发现（resolve 单飞队列用
@@ -219,6 +249,8 @@ val host = Tcp.connect(ip, port, guestSession)
 ## 当前刻意简化的地方
 
 - 界面：无动画、无音效；聊天记录不落盘（退出房间即清空）；牌桌最多 6 座，花砖物语 2–4 人。
+- 本机资料（昵称、头像）落在 DataStore（`DSManager`）：头像转 base64 存成字符串，昵称输入防抖 500ms 写一次；
+  换设备/重装就没了（没有账号体系）。
 - 转屏靠 `android:configChanges` 不重开（房间页尤其重要：重建会 `close()` 掉房间）。
 - 联网：只有"行协议 + socket + 房主回环 + NSD 发现 + 房间快照"这几块，
   **断线重连、离线消息、房主权威转移都没写**；房主退出 = 房间解散。

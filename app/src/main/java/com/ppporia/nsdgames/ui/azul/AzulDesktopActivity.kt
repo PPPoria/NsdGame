@@ -11,7 +11,7 @@ import com.ppporia.nsdgames.R
 import com.ppporia.nsdgames.databinding.ActivityAzulDesktopBinding
 import com.ppporia.nsdgames.viewmodel.azul.AzulDesktopVM
 
-// 横屏、沉浸式
+// 竖屏
 class AzulDesktopActivity : BaseActivity<ActivityAzulDesktopBinding>() {
     private val vm by viewModels<AzulDesktopVM>()
 

@@ -51,70 +51,80 @@ app-net/.../            可用协程 + Android API
   Nsd.kt                 服务类型串 + FoundHost(serviceName, host, port)
   ServiceAdvertiser.kt   注册 NSD 服务（带端口），注销
   ServiceDiscovery.kt    搜服务 → FoundHost；resolve 单飞队列（Channel + 挂起 for）
-  room/RoomProtocol.kt   命令/事件编解码 + 快照编解码 + 转义 + 超预算裁剪（纯逻辑，可测）
+  room/RoomProtocol.kt   协议编解码：命令 / 快照 / ERROR / BYE 的 JSON 序列化 + 超预算裁剪（纯逻辑，可测）
   room/Room.kt           房主侧规则：座位、座次、玩法、准备、踢人、开局（不碰 socket，可测）
   room/RoomState.kt      RoomSnapshot / RoomPlayer / RoomMessage + UI 侧 RoomState
-  room/RoomSession.kt    缝合层：TcpServer + 广播 + 回环客户端 + Room
+  room/RoomSession.kt    缝合层：TcpServer + 广播 + 回环客户端 + Room + 图片通道
+  room/BlobStore.kt      图片仓库（房主/客户端共用）：sha1 内容寻址、分块拼装、hash 校验、LRU 配额
+  room/BlobSender.kt     把一份图按 3KB 一块发给一个 peer
 
 app/.../ui/              只画和点
-  RoomsActivity.kt       首页：昵称 / 创建房间 / 搜到的房间列表
+  RoomsActivity.kt       首页：头像 + 昵称 / 创建房间 / 搜到的房间列表
   RoomActivity.kt        游戏准备房间（房主与客人共用）
   RoomAdapter.kt         房间列表（ListAdapter）
-  SeatAdapter.kt         座位条（座位号 = 出手顺序）
+  SeatAdapter.kt         座位条（座位号 = 出手顺序，有头像就画头像）
   MessageAdapter.kt      聊天列表（自己的靠右、别人的靠左带昵称）
   RoomSettingsSheet.kt   底部设置面板：选游戏 / 牌桌人数 / 玩法开关
   SeatSheet.kt           点座位弹出的动作面板：入座 / 换座 / 请人离开
+  Avatars.kt             头像：选中图后居中裁正方形 + 缩到 ≤512px + WebP（ImageDecoder 自动转正）
 ```
 
 ## 3. 协议：服务端权威快照
 
 ### 3.1 命令与事件
 
-`类型|字段|字段`，一条消息一行（`:core` 的 `Wire` 保证没有换行）。
+一条消息一行，信封是 `类型|负载`（`:core` 的 `Wire` 保证没有换行）；
+**负载永远是 JSON**，由 kotlinx.serialization 生成/解析（`RoomCommand` / `RoomSnapshot` 就是线上那一份）。
 
 ```
 客户端 → 服务端
-  JOIN|<playerId>|<昵称>     进房报到（playerId 由客户端生成）
-  SAY|<内容>                 说话
-  READY|<0|1>                准备 / 取消准备
-  SEAT|<座位>                自己挪到空座位
-  SWAP|<a>|<b>               房主：交换两个座位（一个是空位就是挪过去）
-  SIZE|<人数>                房主：改牌桌人数
-  GAME|<游戏id>              房主：换游戏
-  OPT|<玩法id>|<0|1>         房主：开关自定义玩法
-  KICK|<playerId>            房主：请人离开
-  START                      房主：开始游戏
+  CMD|<RoomCommand 的 JSON>   type = join / say / ready / seat / swap / size / game / option / kick / start
 
 服务端 → 客户端
-  SNAP|<整份快照>            唯一的数据通道（每次变化推给所有人，含发起者）
-  ERROR|<原因>               那条命令没生效（状态没动）
-  BYE|<原因>                 这条连接要被关掉（满员 / 被踢 / 房间解散）
+  SNAP|<RoomSnapshot 的 JSON>  唯一的数据通道（每次变化推给所有人，含发起者）
+  ERROR|<JSON 字符串>          那条命令没生效（状态没动）
+  BYE|<JSON 字符串>            这条连接要被关掉（满员 / 被踢 / 房间解散）
+```
+
+命令的 JSON 长这样（`type` 字段由 `Json.classDiscriminator` 生成）：
+
+```
+CMD|{"type":"join","playerId":"p1","name":"小明"}
+CMD|{"type":"say","text":"开一局？"}
+CMD|{"type":"swap","a":0,"b":3}
+CMD|{"type":"start"}
 ```
 
 ### 3.2 快照（SNAP）的格式
 
-一行 `键=值`，键是短名，值是转义过的：
+就是 `RoomSnapshot` 这个 `@Serializable` 数据类的 JSON：
 
 ```
-SNAP|v=1|room=<房名>|host=<房主playerId>|phase=lobby|game=azul|size=4|hint=<还不能开局的原因，空串=能开>
-    |opt=<玩法id>=<0|1>;<...>
-    |p=<playerId>,<座位>,<昵称>,<h|-><r|->;<...>
-    |msg=<seq>,<playerId>,<内容>;<...>
+SNAP|{"version":2,"roomName":"小明的房间","hostId":"p1","phase":"Lobby","gameId":"azul",
+      "tableSize":4,"startHint":"还差 1 人","options":{"grey":false,"quick":false,"harsh":false},
+      "players":[{"id":"p1","seat":0,"name":"小明","host":true,"ready":false,"avatar":"<sha1>"}],
+      "messages":[{"seq":1,"playerId":"p1","text":"开一局？"}]}
 ```
 
-- `phase`：`lobby`（现在只会是这个）/ `playing`（等对局写好）；
-- `hint`：服务端算好的 `startHint`——"还差 N 人" / "等 X、Y 准备" / 空串（能开）。
-  客户端**只负责显示**，不自己再判一遍；
-- `p` 里的标志位：`h` = 房主，`r` = 准备好了，没有就是 `-`；
-- `msg` 是聊天记录，`seq` 由服务端自增（UI 靠它做列表 diff）。
+（上面为了好读换了行；**线上是一整行**，`Wire` 不允许换行。）
 
-**转义**（`RoomProtocol.esc/unesc`）：`% | ; , =` 和 `\r\n` 都换成 `%XX`。
-于是昵称、房名、聊天内容里带任何分隔符都不会切错，也**不需要担心换行**。
+- `version`：快照版本，现在 `2`（v1 是早期手写的 `键=值` 格式，已经删了）；
+  认不出就整份丢掉，宁可不动也不渲染半份状态；
+- `phase`：`RoomPhase` 的**枚举名**（现在只会是 `Lobby`；`Playing` 及以后的对局阶段等规则写好再用）；
+- `startHint`：服务端算好的"现在还开不了局"的原因——"还差 N 人" / "等 X、Y 准备" / 空串（能开）。
+  客户端**只负责显示**（房主按钮上就写它），不自己再判一遍；
+- `players` 按座位排序；`messages.seq` 由服务端自增（UI 靠它做列表 diff）。
+
+**为什么不用手写拼装**：旧方案要自己定分隔符、自己写转义表（`% | ; , =` + 换行），
+字段一多就是"两处（编码/解码）要手工对齐"，漏一个就是 `decode → null`、客户端卡在旧快照上。
+换成 `@Serializable` 之后：加字段只改数据类（给个默认值就行），
+`Json { ignoreUnknownKeys = true; encodeDefaults = true }` 让新旧版本不会互相炸，
+昵称/房名/聊天内容里带什么字符都交给 JSON。
 
 **长度与裁剪**：单行有 8KB 上限（`Wire.MAX_LINE_BYTES`），快照目标是 6KB
 （`RoomProtocol.MAX_SNAPSHOT_BYTES`）。超了就从**最老的聊天**开始丢，
 人和设置一条不少（`RoomProtocol.snapshot` 里那个 while 循环）。Room 内存里最多留
-`Room.MAX_HISTORY = 40` 条聊天。
+`Room.MAX_HISTORY = 40` 条聊天。JSON 比手写格式每条多几十字节，所以实际能留的聊天条数会少一些。
 
 ### 3.3 三条设计决定
 
@@ -126,6 +136,55 @@ SNAP|v=1|room=<房名>|host=<房主playerId>|phase=lobby|game=azul|size=4|hint=<
 3. **房主由服务端认**：`127.0.0.1` 回环连上来的那条连接，`RoomSession.onJoin` 给
    `Room.join(host = true)`。客户端自称"我是房主"没用。快照里的 `hostId` 只是让 UI
    知道该不该显示房主功能；真正的校验在 `Room.hostOnly()` 里。
+
+### 3.4 图片（头像 / 自定义纹理）的通道
+
+**为什么不在快照里塞图片**：快照每次变化都重发（有人说话、换座位、准备……），图片进快照就是
+把 50 张图 × 房间人数 的流量摊到每一次改动上，而且立刻顶爆 8KB 行上限。
+
+所以图片走**同一条连接上的点对点分块**，快照里只留 id：
+
+```
+客户端 → 服务端
+  CMD|{"type":"blobPut","id":"<sha1>","index":0,"total":14,"data":"<base64>"}   上传一块
+  CMD|{"type":"blobRequest","id":"<sha1>"}                                      要一张图
+
+服务端 → 客户端
+  BLOB|{"id":"<sha1>","index":0,"total":14,"data":"<base64>"}                    一块（3KB 原始字节）
+  BLOB_ERR|{"id":"<sha1>","reason":"房主这里没有这张图"}                          要不到/传不上
+```
+
+**一次"设置头像"的完整流程**：
+
+1. 客户端把图缩到 ≤512px、压成 WebP/JPEG（一般 20–60KB），算 `id = sha1(bytes)`；
+2. `RoomSession.uploadAvatar(bytes)`：本机先 `BlobStore.install`（自己立刻能画），
+   然后把图按 3KB 切块逐条 `blobPut`；
+3. 房主 `BlobStore.put` 逐块写临时文件，**最后一块到了且 sha1 对得上**才转正；
+4. `RoomSession` 调 `Room.setAvatar(playerId, id)` → 广播新快照（`players[].avatar = id`）；
+5. 别人看到快照里的 id：`state.hasBlob(id)` 为假就 `requestBlob(id)`，房主用
+   `BlobSender` 一块一块发回来，客户端拼进自己的 `BlobStore`，拼完 `state.availableBlobs` 里就有它了。
+
+几条硬约束（都在代码里，别绕过）：
+
+- **一块 ≤ `BLOB_CHUNK_BYTES`（3072）**：base64 后 4KB、一行 ~4.2KB。图片大小只决定"多少块"，
+  不决定"单次阻塞多久"；块大小就是控制通道的延迟上限。
+- **不走房间锁、不广播**：`RoomSession` 收到 `blobRequest` 就 `scope.launch { BlobSender.send(...) }`，
+  只给要图的那条连接发；房间锁和快照广播一行都没改。
+- **上传要验 hash**：`BlobStore` 只接受 `sha1` 十六进制的 id（文件名就是 id，顺手挡路径穿越），
+  收齐后重新算一遍 hash 对不上就整份丢掉。
+- **上限**：单图 4MB、单次上传 ≤1367 块、本机 64MB LRU。同一张图（同一个 hash）重复上传直接当完成。
+- **`builtin:` 前缀**：打包在 APK 里的素材（比如花砖的默认纹理）用 `builtin:azul.grey` 这种 id，
+  快照里照样只放 id，但**永远不过网**——UI 从资源里加载即可。
+
+**会话层的两张小表**（都在 `RoomSession` 里，没有"JobId"这种东西：协议里真正的身份是 blobId）：
+
+| 表 | 键 → 值 | 干什么 |
+|---|---|---|
+| `streams`（房主） | `"<peerId>:<blobId>" → Job` | 同一连接同一张图只发一条流：两条流交替会把块序打乱，`BlobStore` 会整份放弃（`BlobStoreTest` 有这条用例）；每条连接最多 4 条流，超了回 `BLOB_ERR`"稍后再试" |
+| `pendingBlobs`（客户端） | `blobId → Job`（Job 只是超时器） | UI 每次重画都调 `requestBlob` 也不会变成请求风暴；30 秒没等到就把占位撤掉，下次重画再要一次 |
+
+Job 在这里的价值只有两个：**能取消**（peer 断开、页面退出、超时）和**能判断在跑**。
+如果只是"发完就忘"，用 `HashSet<String>` 就够；加上超时/取消之后，`Job` 比手写时间戳开关少一堆状态。
 
 ## 4. 状态机（RoomSession）
 
@@ -175,6 +234,10 @@ UI 侧一律"收 `StateFlow` → 渲染"，所以**任何地方都不用自己 `
 - **座位条按座位号做 key**，内容是纯函数（`RoomActivity.seatItems`）：人变了就整格重画。
 - **设置面板每次 `render` 都照着快照重画**：先摘监听 → 落选中态/开关 → 再挂监听，
   否则"同步"会被当成"用户点了"，命令回环。
+- **本机资料要落盘**：昵称和头像是在首页定的，存在 base 的 `DSManager`（DataStore）里
+  （`ProfileStore`）：头像是编码好的 WebP 转 base64，昵称用"pending 值 + 500ms 防抖"的写法——
+  连续输入只写一次，写的过程中又敲字，循环会把最新值接着写掉；离开页面时把没落盘的那次立刻写掉。
+  读失败一律回默认值，不能让存储坏了页面打不开。
 - **点击防抖**：`setOnDebouncedClickListener`（base 提供），否则连点两下会开两个房间。
 - **默认昵称带随机后缀**（`玩家%1$d`）：两台设备都留空就用同一个默认名，服务端会按设计拒绝重名。
 
@@ -186,9 +249,9 @@ UI 侧一律"收 `StateFlow` → 渲染"，所以**任何地方都不用自己 `
 |---|---|
 | `Room.say()` / `setReady()` | 加上 `RoomCommand.Play/Draw/Pass` → `Room.play()` 调 `:core` 的规则引擎 |
 | `RoomSnapshot.messages` | 加 `table`（局面：工厂区 / 中央区 / 各家手牌 / 当前回合） |
-| `Room.start()` 里那句"还在施工" | `phase = RoomPhase.PLAYING` + `clearReadyLocked()` + 广播 |
+| `Room.start()` 里那句"还在施工" | `phase = RoomPhase.Playing` + `clearReadyLocked()` + 广播 |
 | `RoomSnapshot.startHint` | 换成"该谁动"这类服务端算出来的状态 |
-| 开局后 `takeSeat/swap/setOption/selectGame` 的 LOBBY 检查 | 保留：对局中本来就该锁住 |
+| 开局后 `takeSeat/swap/setOption/selectGame` 的 `Lobby` 检查 | 保留：对局中本来就该锁住 |
 
 **规则裁决必须留在 `:core`**（将来的 `AzulEngine` / 规则状态机）。`Room` 只做
 "谁的回合能发什么命令、该广播给谁"，它不判断花色/图案怎么放——这条线越了就会出现
@@ -204,8 +267,11 @@ UI 侧一律"收 `StateFlow` → 渲染"，所以**任何地方都不用自己 `
 **这一版（快照协议 + 游戏准备房间）的代码是新的，真机行为需要按第 9 节再验一遍**：
 
 - [ ] 首页渲染 + 搜索启动
-- [ ] 「创建房间」→ 房间里 1 人、座位条 1 号位是自己、状态「房间由房主同步…」
-- [ ] `nc` 直连：`JOIN|<id>|<昵称>` 后收到 `SNAP|…`，房主页同步出现新座位
+- [ ] 首页点左上角方框 → 系统相册选图 → 预览出正方形头像；选一张竖拍的照片也不躺倒
+- [ ] 杀掉进程重开：昵称和头像都还在（DataStore 落盘），输入框里是上次的名字
+- [ ] 「创建房间」→ 房间里 1 人、座位条 1 号位是自己和头像、状态「房间由房主同步…」
+- [ ] `nc` 直连：`CMD|{"type":"join","playerId":"...","name":"..."}` 后收到 `SNAP|{...}`，房主页同步出现新座位
+- [ ] 第二台设备（或 `nc`）进房：房主座位条上出现对方的头像；对方拉房主的头像也成功
 - [ ] 房主点座位 → 换座 / 请人离开；客人的界面跟着变
 - [ ] 设置里改人数 / 开关玩法 → 两边同时变，准备状态被清空
 - [ ] 全员准备后房主按「开始游戏」→ 状态栏出现"对局还在施工"
@@ -221,12 +287,21 @@ UI 侧一律"收 `StateFlow` → 渲染"，所以**任何地方都不用自己 `
 ```bash
 # 找到本应用的监听端口（0A = LISTEN）
 adb shell cat /proc/net/tcp6
-# 用 nc 当一个客人：报到 → 等广播 → 说一句 → 准备
-adb shell "(printf 'JOIN|abcdefgh|NcTester\n'; sleep 4; printf 'SAY|hi\n'; sleep 2; printf 'READY|1\n'; sleep 3) | nc 127.0.0.1 <端口>"
-# 期望输出（每条都是整份快照）
-# SNAP|v=1|room=小明的房间|host=<房主id>|phase=lobby|game=azul|size=4|hint=还差 1 人|...
-# SNAP|...（带自己那句 hi）
-# SNAP|...（p 段里自己带 r）
+
+# 用 nc 当一个客人：报到 → 说一句 → 准备（JSON 里带引号，所以用 printf 一条条发）
+{
+  printf 'CMD|{"type":"join","playerId":"abcdefgh","name":"NcTester"}\n'
+  sleep 4
+  printf 'CMD|{"type":"say","text":"hi"}\n'
+  sleep 2
+  printf 'CMD|{"type":"ready","ready":true}\n'
+  sleep 3
+} | nc 127.0.0.1 <端口>
+
+# 期望输出（每条都是整份快照；下面是省略过的）
+# SNAP|{"version":2,"roomName":"小明的房间","hostId":"<房主id>","phase":"Lobby","gameId":"azul","tableSize":4,"startHint":"还差 1 人",...}
+# SNAP|{... "messages":[{"seq":1,"playerId":"abcdefgh","text":"hi"}] ...}
+# SNAP|{... "players":[{...,"id":"abcdefgh",...,"ready":true}] ...}
 ```
 
 改协议时，先在这里跑通再动 UI：`nc` 能看到的才是真的协议。
@@ -235,7 +310,7 @@ adb shell "(printf 'JOIN|abcdefgh|NcTester\n'; sleep 4; printf 'SAY|hi\n'; sleep
 
 ```bash
 ./gradlew :core:test              # 行协议 + 真 socket（收发/广播/断开/坏包/房主回环）
-./gradlew :app-net:test           # 命令往返 + 快照往返/裁剪 + 房间规则 + 6KB 快照过真 socket
+./gradlew :app-net:test           # 命令往返 + 快照往返/裁剪 + 房间规则 + 6KB 快照/图片分块过真 socket
 ./gradlew :app:assembleDebug      # 打包
 ./gradlew :app-net:lintDebug :app:lintDebug
 ```

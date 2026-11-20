@@ -1,5 +1,6 @@
 package com.ppporia.nsdgames.ui
 
+import android.graphics.Bitmap
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import androidx.core.view.isVisible
@@ -18,6 +19,8 @@ data class SeatInfo(
     val tag: String,
     val occupied: Boolean,
     val mine: Boolean,
+    /** 已经解好的头像；null = 没设头像或者图还没到（先不画）。 */
+    val avatar: Bitmap? = null,
 )
 
 /**
@@ -55,6 +58,8 @@ class SeatAdapter(private val onClick: (Int) -> Unit) :
             binding.textSeatName.text = item.name
             binding.textSeatTag.isVisible = item.tag.isNotEmpty()
             binding.textSeatTag.text = item.tag
+            binding.cardSeatAvatar.isVisible = item.avatar != null
+            binding.imageSeatAvatar.setImageBitmap(item.avatar)
 
             // 配色来自主题（app 自己的 attr，见 values/attrs.xml）：自己的座位用主题色描边，
             // 有人坐的座位底色重一点、空位轻一点，一眼能分清

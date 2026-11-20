@@ -57,7 +57,7 @@ class RoomTest {
         assertEquals(listOf("房主", "客人"), snapshot.players.map { it.name })
         assertEquals("azul", snapshot.gameId)
         assertEquals(4, snapshot.tableSize)
-        assertEquals(RoomPhase.LOBBY, snapshot.phase)
+        assertEquals(RoomPhase.Lobby, snapshot.phase)
         assertTrue("新人也是房主那条快照里的一员", snapshot.player("p2") != null)
         assertEquals("同一时刻所有人看到的快照必须一致", host.lastSnapshot(), guest.lastSnapshot())
     }
@@ -209,7 +209,7 @@ class RoomTest {
         room.setReady("p2", true)
         assertEquals("都准备好了，快照里不再有阻拦原因", "", host.lastSnapshot().startHint)
         assertTrue("规则写好了才能真的开局", room.start("host")!!.contains("施工"))
-        assertEquals("被挡下时房间状态不该动", RoomPhase.LOBBY, host.lastSnapshot().phase)
+        assertEquals("被挡下时房间状态不该动", RoomPhase.Lobby, host.lastSnapshot().phase)
     }
 
     @Test
@@ -237,5 +237,24 @@ class RoomTest {
 
         assertNotNull("不能踢自己", room.kick("host", "host"))
         assertNotNull("踢一个已经不在的人要拒绝", room.kick("host", "p2"))
+    }
+
+    // ── 头像 ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `头像 id 会进快照，非法 id 被拒`() {
+        join(host)
+        join(guest)
+        val id = "d".repeat(40)
+
+        assertNull(room.setAvatar("p2", id))
+        assertEquals("快照里只带 id，不带图片本体", id, guest.lastSnapshot().player("p2")!!.avatar)
+        assertEquals("所有人看到同一份", id, host.lastSnapshot().player("p2")!!.avatar)
+
+        assertNull("打包素材的 builtin: id 也认", room.setAvatar("p2", "builtin:azul.grey"))
+        assertEquals("builtin:azul.grey", host.lastSnapshot().player("p2")!!.avatar)
+
+        assertNotNull("不是 sha1 的 id 要拒", room.setAvatar("p2", "../../evil"))
+        assertEquals("被拒的 id 不该改状态", "builtin:azul.grey", host.lastSnapshot().player("p2")!!.avatar)
     }
 }

@@ -2,6 +2,8 @@ package com.ppporia.nsdgames.ui
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -34,6 +36,9 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
     private var state = RoomState()
     private var lastMessageSeq = -1
     private var actionsBasePadding = 0
+
+    /** 头像 id → 解好的小图。同一次会话里每个人最多解一次（512px WebP，解码就几毫秒）。 */
+    private val avatarBitmaps = HashMap<String, Bitmap>()
 
     override fun onCreateBinding(): ActivityRoomBinding = ActivityRoomBinding.inflate(layoutInflater)
 
@@ -127,6 +132,11 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
             else -> getString(R.string.room_status_online)
         }
 
+        // 谁有头像但本机还没有，就去要一张（session 自己会去重，重画多少次都无所谓）
+        snapshot?.players?.forEach { player ->
+            if (player.avatar.isNotEmpty()) session?.requestBlob(player.avatar)
+        }
+
         seatAdapter.submitList(seatItems(snapshot, next))
         binding.textSeatsHint.text = when {
             !next.online -> getString(R.string.room_seats_hint_readonly)
@@ -177,8 +187,21 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
                 },
                 occupied = player != null,
                 mine = player != null && player.id == state.myId,
+                avatar = player?.avatar?.takeIf { it.isNotEmpty() }?.let { avatarOf(it) },
             )
         }
+    }
+
+    /**
+     * 头像 id → 小图。没有（还没拉回来）就返回 null，座位卡先不画头像；
+     * 拉回来之后快照/`availableBlobs` 会再推一次状态，这里再解码一次就有了。
+     */
+    private fun avatarOf(id: String): Bitmap? {
+        avatarBitmaps[id]?.let { return it }
+        val file = session?.blobFile(id) ?: return null
+        val bitmap = runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull() ?: return null
+        avatarBitmaps[id] = bitmap
+        return bitmap
     }
 
     private fun scrollToLatest(snapshot: RoomSnapshot?) {
@@ -221,9 +244,10 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
     private fun openSession(): RoomSession? {
         val player = intent.getStringExtra(EXTRA_PLAYER).orEmpty()
             .ifBlank { getString(R.string.default_nickname, Random.nextInt(10, 100)) }
+        val avatar = intent.getByteArrayExtra(EXTRA_AVATAR)
 
         if (intent.getBooleanExtra(EXTRA_HOST, false)) {
-            return RoomSession.host(this, intent.getStringExtra(EXTRA_ROOM).orEmpty(), player)
+            return RoomSession.host(this, intent.getStringExtra(EXTRA_ROOM).orEmpty(), player, avatar)
         }
 
         val address = intent.getStringExtra(EXTRA_ADDRESS)
@@ -233,12 +257,14 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
             return null
         }
         return RoomSession.guest(
+            this,
             FoundHost(
                 serviceName = intent.getStringExtra(EXTRA_ROOM).orEmpty(),
                 host = address,
                 port = port,
             ),
             player,
+            avatar,
         )
     }
 
@@ -249,19 +275,31 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
         private const val EXTRA_ADDRESS = "extra_address"
         private const val EXTRA_PORT = "extra_port"
         private const val EXTRA_PLAYER = "extra_player"
+        private const val EXTRA_AVATAR = "extra_avatar"
 
         /** 开一间房：起服务端 + 广播端口 + 自己回环连上来。 */
-        fun startHost(context: Context, roomName: String, playerName: String) {
+        fun startHost(
+            context: Context,
+            roomName: String,
+            playerName: String,
+            avatar: ByteArray? = null,
+        ) {
             context.startActivity(
                 Intent(context, RoomActivity::class.java)
                     .putExtra(EXTRA_HOST, true)
                     .putExtra(EXTRA_ROOM, roomName)
                     .putExtra(EXTRA_PLAYER, playerName)
+                    .putExtra(EXTRA_AVATAR, avatar)
             )
         }
 
         /** 加入搜到的房间。 */
-        fun startGuest(context: Context, target: FoundHost, playerName: String) {
+        fun startGuest(
+            context: Context,
+            target: FoundHost,
+            playerName: String,
+            avatar: ByteArray? = null,
+        ) {
             context.startActivity(
                 Intent(context, RoomActivity::class.java)
                     .putExtra(EXTRA_HOST, false)
@@ -269,6 +307,7 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
                     .putExtra(EXTRA_ADDRESS, target.host)
                     .putExtra(EXTRA_PORT, target.port)
                     .putExtra(EXTRA_PLAYER, playerName)
+                    .putExtra(EXTRA_AVATAR, avatar)
             )
         }
     }

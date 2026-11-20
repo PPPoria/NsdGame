@@ -3,6 +3,8 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
+    // 房间协议用 @Serializable 数据类：快照/命令整份 JSON，不手写拼装与转义
+    alias(libs.plugins.kotlin.serialization)
 }
 
 // 局域网发现层：只做一件事——用 NSD（mDNS）把"我开了个牌局 / 局域网里有谁开了牌局"告诉别人。
@@ -39,6 +41,10 @@ dependencies {
     // 省掉 pending 队列 + resolving 标志位；RoomSession 也用它做后台建房间/连接。
     // 注意：只有这一个模块用协程，:core 的 socket 层刻意保持零依赖（阻塞写，天然背压）。
     implementation(libs.kotlinx.coroutines.android)
+
+    // 房间协议（room/）的 JSON 编解码：快照是一份 @Serializable 数据类，
+    // 手写"键=值 + 转义"的方案已经删掉（见 docs/room-reference.md 第 3 节）。
+    implementation(libs.kotlinx.serialization.json)
 
     // RoomProtocol / Room 不碰 Android，用普通 JUnit 在 JVM 上直接测
     testImplementation(libs.junit)

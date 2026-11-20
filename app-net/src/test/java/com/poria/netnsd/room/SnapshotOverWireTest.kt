@@ -64,7 +64,7 @@ class SnapshotOverWireTest {
         return RoomSnapshot(
             roomName = "小明的房间",
             hostId = "host-1",
-            phase = RoomPhase.LOBBY,
+            phase = RoomPhase.Lobby,
             gameId = "azul",
             tableSize = 4,
             startHint = "等 小红 准备",

@@ -36,6 +36,8 @@
 | `room/Room` | 房主侧规则：分座位、排座次、改人数、换游戏、玩法开关、准备、踢人、开局校验。**不碰 socket**（每个成员只给 `send`/`close` 回调） | ✅ JVM 单测 |
 | `room/RoomSession` | 把 `TcpServer` + NSD 广播 + 回环客户端 + `Room` 缝起来，对外只有 `state` + 一串命令方法 | ❌ 要真机 |
 | `room/RoomState` | UI 要渲染的东西：本机连接状态（CONNECTING/ONLINE/CLOSED）+ 服务端快照（`RoomSnapshot`） | — |
+| `room/BlobStore` | 图片仓库（房主和客户端共用）：内容寻址 sha1、分块拼装、hash 校验、LRU 配额 | ✅ JVM 单测 |
+| `room/BlobSender` | 把一份图按 3KB 一块发给一个 peer（真 socket 测过） | ✅ JVM 单测 |
 
 ```kotlin
 // 房主
@@ -52,23 +54,48 @@ val session = RoomSession.guest(foundHost, "小红")
 ## 协议：只有快照，没有增量事件
 
 ```
-客户端 → 服务端    JOIN|<playerId>|<昵称>    SAY|<内容>       READY|<0|1>
-                  SEAT|<座位>               SWAP|<a>|<b>     SIZE|<人数>
-                  GAME|<游戏id>             OPT|<玩法>|<0|1>  KICK|<playerId>  START
+客户端 → 服务端    CMD|<RoomCommand 的 JSON>
+                   type = join / say / ready / seat / swap / size / game / option / kick / start
 
-服务端 → 客户端    SNAP|<整份快照>           ERROR|<原因>      BYE|<原因>
+服务端 → 客户端    SNAP|<RoomSnapshot 的 JSON>    ERROR|<JSON 字符串>    BYE|<JSON 字符串>
 ```
 
-两条重要的约定：
+四条重要的约定：
 
 1. **`SNAP` 广播给所有人，包括发起者**。客户端不做本地回显、不做本地推演，
    所以花名册/座次/设置永远只有服务端这一份真相（旧版"客户端自己攒 JOINED/LEFT"的做法已经删了）。
 2. **`playerId` 由客户端生成**。服务端认可后就是身份，座位是可变的、身份不变；
    客户端因此不用等"你被分到几号"就知道快照里哪一行是自己。
+3. **负载是 JSON**（kotlinx.serialization）：`RoomCommand` / `RoomSnapshot` 都是 `@Serializable`
+   数据类，没有手写拼接和转义表；加字段只改数据类，`ignoreUnknownKeys` 让新旧版本不会互相炸。
+4. **单行上限 8KB**（`Wire`），快照目标 6KB——**超了先丢最老的聊天**，人和设置一条不少。
 
-快照是一行 `键=值`，值里的 `% | ; , =` 和换行都转义（`RoomProtocol.esc/unesc`），
-所以昵称/房名/聊天内容里带任何分隔符都不会切错。单行上限 8KB（`Wire`），
-快照目标 6KB——**超了先丢最老的聊天**，人和设置一条不少。
+命令的那条 JSON 长这样（`type` 是 `Json.classDiscriminator` 的默认值）：
+
+```
+CMD|{"type":"join","playerId":"p1","name":"小明"}
+CMD|{"type":"say","text":"开一局？"}
+CMD|{"type":"start"}
+```
+
+## 图片：同一条连接、分块、点对点
+
+```
+客户端 → 服务端   CMD|{"type":"blobPut","id":<sha1>,"index":0,"total":14,"data":"<base64>"}
+                  CMD|{"type":"blobRequest","id":<sha1>}
+服务端 → 客户端   BLOB|{"id":…,"index":0,"total":14,"data":"<base64>"}    BLOB_ERR|{"id":…,"reason":…}
+```
+
+- 一块 **3KB 二进制**：base64 后 4KB，加上 JSON 骨架一行约 4.2KB，稳在 8KB 行上限内；
+  单次阻塞写几毫秒，图表传输不会把聊天/快照卡住；
+- **点对点**：`BLOB` 只发给要图的那条连接，不进快照、不做广播；
+- **内容寻址**：`id = sha1(图)`，房主只存一份、全屋只传一次；`builtin:` 开头的素材打包在 APK 里，不走网络；
+- **上传完成才提交**：最后一块到了且 hash 对得上，`RoomSession` 才调 `Room.setAvatar` 广播新快照；
+- 单图 ≤4MB、单次上传 ≤1367 块、本机缓存 64MB LRU；
+- 用法：`session.uploadAvatar(bytes)`、`session.requestBlob(id)`、`session.blobFile(id)`，
+  以及 `state.availableBlobs`（本机已经拼完的 id）。
+- 会话层两张小表兜底：房主 `(peer, blobId) → Job`（同一张图对同一连接只发一条流，最多 4 条并发），
+  客户端 `blobId → Job`（`requestBlob` 去重 + 30 秒超时后撤掉占位）。
 
 ## 房主：开局 + 广播
 
@@ -122,6 +149,10 @@ val session = RoomSession.guest(room, "小红")
 resolve 收集协程，一处是 `RoomSession` 的后台建房间/连接。**`:core` 的 socket 层刻意不引协程**：
 那里 `send()` 是阻塞写，慢对端自然形成背压；换成 channel 就得回答"队列满了丢哪条消息"，
 丢一条聊天/出牌消息是没法诊断的 bug。
+
+另外多了一个 `kotlinx-serialization-json`（+ 对应编译器插件），只给 `room/` 的协议用：
+`RoomCommand` / `RoomSnapshot` 是 `@Serializable` 数据类，整份 JSON 直接上线，
+不用手写字段拼接和转义。它只出现在这个模块，`:core` / `:base` / `:app` 都没有它。
 
 ## 必须记住的约束
 

@@ -1,5 +1,6 @@
 package com.poria.netnsd.room
 
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -37,10 +38,29 @@ class RoomProtocolTest {
     }
 
     @Test
-    fun `命令里的分隔符转义后还能原样解出来`() {
-        val tricky = "a|b;c,d=e%f"
+    fun `命令里的特殊字符交给 JSON，往返不会变形`() {
+        // 这些字符以前要手写转义表挡（| ; , = %），现在由 JSON 负责
+        val tricky = "a|b;c,d=e%f\"引号\"\\反斜杠"
         assertEquals(RoomCommand.Say(tricky), RoomProtocol.decodeCommand(RoomProtocol.say(tricky)))
-        assertEquals(RoomCommand.Kick(tricky), RoomProtocol.decodeCommand(RoomProtocol.kick(tricky)))
+
+        // 昵称有 12 字上限，所以这里用一个短的：重要的是竖线和引号不被信封切坏
+        val name = "a|b\"引\\号"
+        assertEquals(
+            RoomCommand.Join("p1", name),
+            RoomProtocol.decodeCommand(RoomProtocol.join("p1", name)),
+        )
+    }
+
+    @Test
+    fun `命令是 type 区分的 JSON`() {
+        val line = RoomProtocol.say("你好")
+        assertTrue("命令走 CMD 信封：$line", line.startsWith("CMD|{"))
+        assertTrue("用 type 区分是哪个命令：$line", line.contains("\"type\":\"say\""))
+        assertTrue("中文原样走 UTF-8，不转成 \\uXXXX：$line", line.contains("\"text\":\"你好\""))
+
+        val start = RoomProtocol.start()
+        assertEquals(RoomCommand.Start, RoomProtocol.decodeCommand(start))
+        assertTrue(start.contains("\"type\":\"start\""))
     }
 
     @Test
@@ -67,19 +87,21 @@ class RoomProtocolTest {
     @Test
     fun `坏包返回 null 而不是抛异常`() {
         listOf(
-            "", "|x", "NOPE|x", "JOIN", "JOIN|", "JOIN|p1",
-            "SEAT|x", "SWAP|1", "SWAP|1|x", "SIZE|x", "GAME|", "OPT|grey", "OPT||1",
-            "KICK|", "READY|2",
+            // 信封就不对（旧格式、缺竖线、负载为空）
+            "", "|x", "NOPE|x", "JOIN", "JOIN|p1", "SAY|你好", "CMD", "CMD|", "SNAP|",
+            // 信封对了但 JSON 坏 / 认不出这个命令
+            "CMD|{", "CMD|{}", "CMD|{\"type\":\"nope\"}", "CMD|[1,2,3]", "CMD|\"文本\"",
         ).forEach {
             assertNull("命令 `$it` 应该被忽略", RoomProtocol.decodeCommand(it))
         }
-        listOf("", "|x", "NOPE|1", "SNAP", "SNAP|", "SNAP|v=2").forEach {
+        listOf(
+            "", "|x", "NOPE|1", "SNAP", "SNAP|", "SNAP|{}", "SNAP|{bad json}",
+            "ERROR", "ERROR|", "BYE|",
+        ).forEach {
             assertNull("事件 `$it` 应该被忽略", RoomProtocol.decodeEvent(it))
         }
-        // 内容为空的 SAY / ERROR / BYE 是"合法但没用"：解出空串，交给房间层忽略
-        assertEquals(RoomCommand.Say(""), RoomProtocol.decodeCommand("SAY"))
-        assertEquals(RoomEvent.Error(""), RoomProtocol.decodeEvent("ERROR"))
-        assertEquals(RoomEvent.Bye(""), RoomProtocol.decodeEvent("BYE"))
+        // 旧协议的命令串现在一律不认（版本不一致时也别炸）
+        assertNull(RoomProtocol.decodeCommand("JOIN|p1|小明"))
     }
 
     // ── 快照 ────────────────────────────────────────────────────────────────
@@ -89,7 +111,7 @@ class RoomProtocolTest {
         val snapshot = RoomSnapshot(
             roomName = "小明|的房间",
             hostId = "host-1",
-            phase = RoomPhase.LOBBY,
+            phase = RoomPhase.Lobby,
             gameId = "azul",
             tableSize = 4,
             startHint = "",
@@ -105,8 +127,11 @@ class RoomProtocolTest {
         )
 
         val line = RoomProtocol.snapshot(snapshot)
+        assertTrue("快照走 SNAP 信封：$line", line.startsWith("SNAP|{"))
         assertTrue("快照不能带换行", line.indexOf('\n') < 0)
         assertTrue("快照不能超预算", line.toByteArray(Charsets.UTF_8).size <= RoomProtocol.MAX_SNAPSHOT_BYTES)
+        assertTrue("版本号要显式在线上：$line", line.contains("\"version\":${RoomProtocol.VERSION}"))
+        assertTrue("阶段用枚举名：$line", line.contains("\"phase\":\"Lobby\""))
 
         val event = RoomProtocol.decodeEvent(line)
         assertNotNull("快照必须能解出来：$line", event)
@@ -118,7 +143,7 @@ class RoomProtocolTest {
         val snapshot = RoomSnapshot(
             roomName = "空房间",
             hostId = "",
-            phase = RoomPhase.LOBBY,
+            phase = RoomPhase.Lobby,
             gameId = "azul",
             tableSize = 2,
             startHint = "还差 1 人",
@@ -136,7 +161,7 @@ class RoomProtocolTest {
         val snapshot = RoomSnapshot(
             roomName = "长聊天",
             hostId = "p1",
-            phase = RoomPhase.LOBBY,
+            phase = RoomPhase.Lobby,
             gameId = "azul",
             tableSize = 4,
             startHint = "等 小明 准备",
@@ -162,11 +187,79 @@ class RoomProtocolTest {
     fun `版本不认识就当坏包`() {
         val line = RoomProtocol.snapshot(
             RoomSnapshot(
-                roomName = "r", hostId = "", phase = RoomPhase.LOBBY, gameId = "azul",
+                roomName = "r", hostId = "", phase = RoomPhase.Lobby, gameId = "azul",
                 tableSize = 4, startHint = "", options = emptyMap(), players = emptyList(),
                 messages = emptyList(),
             )
-        ).replace("|v=${RoomProtocol.VERSION}", "|v=99")
+        ).replace("\"version\":${RoomProtocol.VERSION}", "\"version\":99")
+        assertTrue("确实改到了版本号", line.contains("\"version\":99"))
         assertNull("版本不一致要整份丢掉，别渲染半份状态", RoomProtocol.decodeEvent(line))
+    }
+
+    @Test
+    fun `多出来的字段不会把老客户端炸掉`() {
+        val line = RoomProtocol.snapshot(
+            RoomSnapshot(
+                roomName = "r", hostId = "", phase = RoomPhase.Lobby, gameId = "azul",
+                tableSize = 4, startHint = "", options = emptyMap(), players = emptyList(),
+                messages = emptyList(),
+            )
+        ).replace("\"roomName\"", "\"futureField\":123,\"roomName\"")
+        // ignoreUnknownKeys：对端版本更新时照样能画
+        assertNotNull(RoomProtocol.decodeEvent(line))
+    }
+
+    // ── 图片（头像 / 自定义纹理） ────────────────────────────────────────────
+
+    @Test
+    fun `要图和上传命令往返，二进制走 base64`() {
+        val id = "a".repeat(40)
+        assertEquals(RoomCommand.RequestBlob(id), RoomProtocol.decodeCommand(RoomProtocol.requestBlob(id)))
+
+        val data = ByteArray(200) { it.toByte() }
+        val decoded = RoomProtocol.decodeCommand(RoomProtocol.putBlob(id, 0, 3, data)) as RoomCommand.PutBlob
+        assertEquals(id, decoded.id)
+        assertEquals(0, decoded.index)
+        assertEquals(3, decoded.total)
+        assertEquals(RoomProtocol.ROLE_AVATAR, decoded.role)
+        assertArrayEquals(data, decoded.data)
+    }
+
+    @Test
+    fun `图片分块事件往返`() {
+        val id = "b".repeat(40)
+        val data = ByteArray(3_000) { (it % 256).toByte() }
+        val line = RoomProtocol.blobChunk(id, 1, 2, data)
+        assertTrue("分块走 BLOB 信封：$line", line.startsWith("BLOB|{"))
+
+        val event = RoomProtocol.decodeEvent(line) as RoomEvent.Blob
+        assertEquals(id, event.id)
+        assertEquals(1, event.index)
+        assertEquals(2, event.total)
+        assertArrayEquals(data, event.data)
+
+        val error = RoomProtocol.decodeEvent(RoomProtocol.blobError(id, "房主这里没有这张图"))
+            as RoomEvent.BlobError
+        assertEquals("房主这里没有这张图", error.reason)
+    }
+
+    @Test
+    fun `非法分块被丢掉`() {
+        val id = "c".repeat(40)
+        assertNull("index 越界", RoomProtocol.decodeEvent(RoomProtocol.blobChunk(id, 5, 2, ByteArray(10))))
+        assertNull(
+            "一块不能超过 BLOB_CHUNK_BYTES",
+            RoomProtocol.decodeEvent(
+                RoomProtocol.blobChunk(id, 0, 1, ByteArray(RoomProtocol.BLOB_CHUNK_BYTES + 1)),
+            ),
+        )
+        assertNull(
+            "base64 坏了",
+            RoomProtocol.decodeEvent("BLOB|{\"id\":\"$id\",\"index\":0,\"total\":1,\"data\":\"###\"}"),
+        )
+        assertNull(
+            "没有 data 字段",
+            RoomProtocol.decodeEvent("BLOB|{\"id\":\"$id\",\"index\":0,\"total\":1}"),
+        )
     }
 }

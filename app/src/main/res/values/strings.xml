@@ -11,6 +11,9 @@
     <string name="rooms_empty">还没发现房间\n在另一台设备点「创建房间」，或者先自己开一间</string>
     <string name="rooms_status">正在搜索同一个 WiFi 下的房间…（找到 %1$d 个）</string>
     <string name="rooms_game_wip">%1$s（开发中）</string>
+    <string name="rooms_pick_avatar">选择头像</string>
+    <string name="rooms_avatar_hint">头像</string>
+    <string name="rooms_avatar_failed">这张图读不出来，换一张试试</string>
     <string name="room_item_subtitle">%1$s · 点击加入</string>
     <string name="default_nickname">玩家%1$d</string>
     <string name="room_name_of">%1$s的房间</string>
@@ -31,6 +34,7 @@
     <string name="room_cancel_ready">取消准备</string>
     <string name="room_start">开始游戏</string>
     <string name="room_seat_no">%1$d 号位</string>
+    <string name="room_seat_avatar">玩家头像</string>
     <string name="room_seat_empty">空位</string>
     <string name="room_seat_host">房主</string>
     <string name="room_seat_ready">已准备</string>

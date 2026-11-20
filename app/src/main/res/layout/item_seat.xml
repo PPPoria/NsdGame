@@ -24,6 +24,27 @@
         android:paddingEnd="@dimen/space_s"
         android:paddingBottom="@dimen/space_s">
 
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/cardSeatAvatar"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginBottom="@dimen/space_xs"
+            android:visibility="gone"
+            app:cardBackgroundColor="?attr/colorSurfaceVariant"
+            app:cardCornerRadius="@dimen/corner_s"
+            app:cardElevation="0dp"
+            app:strokeColor="?attr/colorOutlineVariant"
+            app:strokeWidth="1dp"
+            tools:visibility="visible">
+
+            <ImageView
+                android:id="@+id/imageSeatAvatar"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@string/room_seat_avatar"
+                android:scaleType="centerCrop" />
+        </com.google.android.material.card.MaterialCardView>
+
         <TextView
             android:id="@+id/textSeatNo"
             android:layout_width="wrap_content"

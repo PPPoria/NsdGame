@@ -53,8 +53,8 @@ dependencies {
     api(libs.material)
 
     // 实现细节，不对外暴露类型
-    // 注意：这里没有 kotlinx-serialization —— base 不做存档/序列化，需要时由业务模块自己声明
-    // （gradle/libs.versions.toml 里已备好插件与库的条目）
+    // 注意：这里没有 kotlinx-serialization —— base 不做存档/序列化；
+    // 需要序列化的是 :app-net 的房间协议（它自己声明插件和依赖），base 不背这个包。
     implementation(libs.androidx.datastore.preferences)
 
     testImplementation(libs.junit)
