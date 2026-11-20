@@ -48,9 +48,8 @@ kotlin {
 dependencies {
     // 走 base 就能拿到 appcompat / material / activity / fragment / lifecycle / coroutines / core
     implementation(project(":base"))
-
-    // app 自己的布局用了 ConstraintLayout，显式声明，别依赖 base 传递
-    implementation(libs.androidx.constraintlayout)
+    // 显式声明：app 直接用 UnoEngine / UnoState / UnoAi
+    implementation(project(":core"))
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

@@ -1,123 +1,77 @@
-# NsdGames
+# 茯苓游戏（NsdGames）
 
-Android 游戏项目骨架。当前只有基础模块，玩法模块待建。
+单人 Android 小游戏集合。**第一个游戏是单机 UNO**（1 个真人 + 3 个电脑）。
 
-> **给实现上层的 AI / 开发者**：请先读 [`docs/BASE_MODULE_GUIDE.md`](docs/BASE_MODULE_GUIDE.md)。
-> 它是 `:core` + `:base` 的唯一权威契约（API 签名、生命周期时序、资源约定、禁止项、变更申请流程）。
-> `:base` / `:core` 由专人维护，上层不要直接改。
+设计目标只有一个：**一个人一个周末能看懂、改得动、测得出**。
+所以模块就三个、规则就一个文件、界面就一张画布，没有 DI / EventBus / Repository / UseCase。
 
-## 模块划分
+```
+core/                     纯 Kotlin 游戏内核，零 Android 依赖
+  src/main/kotlin/com/poria/uno/
+    Card.kt               UnoColor / UnoKind / UnoCard + 108 张牌的整副牌
+    UnoState.kt           一局游戏的完整状态（不可变）+ isPlayable
+    UnoAction.kt          Play / Draw / Pass + IllegalMove
+    UnoEngine.kt          ★ 全部规则：出牌合法性、跳过/反转/罚牌、摸牌、洗牌重发、胜负
+    UnoAi.kt              电脑玩家（贪心，不搜索）
+  src/test/kotlin/com/poria/uno/
+    UnoEngineTest.kt      规则单测 + AI 自对弈一整局
 
-| 模块 | 类型 | 职责 |
-|---|---|---|
-| `:core` | 纯 Kotlin（`java-library`） | 与平台无关的工具：时间换算、HSL 颜色、哈希。零 Android 依赖，`./gradlew :core:test` 秒级跑完 |
-| `:base` | Android Library | UI 基类（Activity/Fragment/Dialog）、View/Context 扩展、键值存储、线程池、StrictMode |
-| `:app` | Android Application | 壳工程：Manifest、主题、启动页，把上面两个模块组装起来 |
+base/                     Android 基础设施（可复用的，跟游戏无关）
+  BaseActivity/BaseFragment/BaseDialog、dp2px、防抖点击、DSManager、ThreadPool
 
-依赖方向：`:app` → `:base` → `:core`。不允许反向依赖。
-
-## 基础设施用法
-
-### 1. Application
-
-```kotlin
-class App : BaseApp()
+app/                      唯一的应用模块
+  src/main/java/com/ppporia/nsdgames/
+    ui/MenuActivity.kt    首页
+    ui/UnoActivity.kt     对局页：把状态画出来、把点击变成动作、显示错误提示
+    ui/UnoTableView.kt    ★ 牌桌自绘（Canvas + onTouchEvent，不用 RecyclerView）
+    session/GameSession.kt 状态持有 + 转发动作 + 跑电脑；StateFlow 给 UI 订阅
+    net/README.md         联网占位，现在是空的
 ```
 
-并在 `AndroidManifest.xml` 的 `<application android:name=".App">` 注册。
-继承 `BaseApp` 会自动完成 `DSManager` 初始化和 debug 构建下的 StrictMode。
+依赖方向：`:app` → `:base` → `:core`。反向依赖编译不过。
 
-### 2. BaseActivity / BaseFragment / BaseDialog
+## 跑起来
 
-```kotlin
-class HomeActivity : BaseActivity<ActivityHomeBinding>() {
-    override fun onCreateBinding() = ActivityHomeBinding.inflate(layoutInflater)
-    override fun initView() { /* 同步、一次 */ }
-    override fun initListener() { /* 同步、一次 */ }
-    override suspend fun loadData() { /* 每次回到前台执行 */ }
-    override suspend fun bindUi() { /* STARTED 期间订阅，退后台自动取消 */ }
-}
+```bash
+./gradlew :core:test          # 规则单测，几秒跑完，不需要模拟器
+./gradlew :app:assembleDebug  # 打包 APK
 ```
 
-```kotlin
-class HomeFragment : BaseFragment<FragmentHomeBinding>() {
-    override fun onCreateBinding(inflater: LayoutInflater, container: ViewGroup?) =
-        FragmentHomeBinding.inflate(inflater, container, false)
-}
-```
+## 想改东西时改哪个文件
 
-```kotlin
-class ConfirmDialog : BaseDialog<DialogConfirmBinding>() {
-    override fun onCreateBinding(inflater: LayoutInflater, container: ViewGroup?) =
-        DialogConfirmBinding.inflate(inflater, container, false)
-}
-```
+| 想改什么 | 改这里 |
+|---|---|
+| 规则（能不能出、跳过反转、罚几张） | `core/.../UnoEngine.kt` |
+| 状态里有哪些字段 | `core/.../UnoState.kt` |
+| 电脑怎么出牌 | `core/.../UnoAi.kt` |
+| 牌桌长什么样 | `app/.../ui/UnoTableView.kt` |
+| 点了牌之后干什么 | `app/.../ui/UnoActivity.kt` |
+| 本地打还是联网打 | `app/.../session/GameSession.kt` |
 
-生命周期钩子语义（三者一致）：
+## 架构硬约束（以后让 AI 写代码时把这段贴给它）
 
-- `initView` / `initListener`：`onCreateView`/`onViewCreated` 里**同步**执行一次，绝不能放耗时操作。
-- `loadData` / `bindUi`：包在 `repeatOnLifecycle(STARTED)` 里，回到前台重新执行、退后台自动取消，不会叠加 collector。
-- `binding` 在 `onDestroy` / `onDestroyView` 里被释放，访问时机不对会立刻抛出可读的异常，而不是静默持有旧 View。
+单人项目，边界由人定，AI 只填实现。**以下每一条都是"不许"**：
 
-系统栏：
+1. 只有 `:core` / `:base` / `:app` 三个模块，**禁止新增模块**。
+2. **禁止新增依赖**。现在只有 AndroidX 基础库、Material、kotlinx-coroutines。
+3. 禁止 Hilt / Koin / Dagger、RxJava、EventBus、Room、Navigation。
+4. 禁止"只有一个实现的接口"、禁止 UseCase / Repository / Mapper 分层、禁止自己写 DI 容器。
+5. 规则判定只能写在 `:core`。UI 或 session 里出现"这张牌能不能出"的判断就是 bug——
+   应该问 `UnoState.isPlayable` 或让 `UnoEngine.reduce` 抛 `IllegalMove`。
+6. 新文件先按 200 行估一遍，超了就想想是不是在造框架。
+7. 每个功能一次做完再做下一个，不要预留"以后可能要"的扩展点。
 
-- `BaseActivity` 自动 `enableEdgeToEdge()`，并把系统栏 insets **叠加**到根布局原有 padding 上（不会清零你写的 padding）。
-- 想换个 View 承载内边距，重写 `insetTarget`。
-- 全屏游戏画面：`setImmersiveLayout(true)`；状态栏图标深浅：`setLightStatusBar()` / `setLightNavigationBar()`。
-- 需要刘海/输入法处理时重写 `onWindowInsetsChanged(insets)`。
+审查时只问四句话：这个抽象有第二个实现吗？这个类能一句话说清职责吗？新增依赖了吗？
+规则判定有没有散到 UI / 网络里？
 
-### 3. DSManager（键值存储）
+## 当前刻意简化的地方
 
-```kotlin
-DSManager.setInt("highest_score", 120)
-DSManager.getInt("highest_score").collect { score -> /* ... */ }
-```
-
-- 所有 `getXxx` 都是 `Flow`，已做 `distinctUntilChanged`，无关 key 变化不会触发下游刷新。
-- `Double` 用 long 位模式存储，精度无损（但别把同一个 key 既当 Long 又当 Double）。
-- 需要删除时用 `remove(key)` / `clear()`。
-- 高频写入（每帧级别）的数据不要放这里，DataStore 每次 edit 都会重写整个文件。
-
-### 4. ThreadPool（后台线程）
-
-```kotlin
-withContext(ThreadPool.dispatcher) { /* 后台任务 */ }
-```
-
-有界队列（64）+ 2~4 线程 + 命名线程，抓 Systrace 时一眼能认出是哪个池。
-
-### 5. 扩展函数
-
-```kotlin
-button.setOnClickListenerWithClickAnimation(debounceMillis = 500) { /* 带按压动画 + 防抖 */ }
-button.setOnDebouncedClickListener { /* 只防抖 */ }
-val px = context.dp2px(12f)
-```
-
-## 资源约定
-
-- 尺寸用 `@dimen/space_*` / `@dimen/corner_*` / `@dimen/text_*` / `@dimen/elevation_*`，不要写魔法数字。
-- 圆角背景用 `@drawable/bg_corner_*`，底色是 `?attr/colorSurface`，暗色模式自动适配。**不要**在 drawable 里写死 `#FFFFFF`。
-- base 只提供主题基座 `Theme.Base`，app 里 `Theme.NsdGames` 继承它。改主题只改 app。
+- UNO 规则：不喊"UNO"罚牌、不做 +4 质疑、不计分、不打多局。
+- 界面：自绘无动画、无音效、手牌不拖拽（点一下出牌）。
+- 转屏靠 `android:configChanges` 不重开；真要横竖屏两套布局时再把状态搬进 ViewModel。
+- 联网：见 `app/src/main/java/com/ppporia/nsdgames/net/README.md`。
 
 ## 版本管理约定
 
-- 所有依赖坐标和版本只在 `gradle/libs.versions.toml` 里，模块里**不允许**出现带版本号的依赖。
-- 插件统一在根 `build.gradle.kts` 用 `apply false` 声明版本，模块里用 `alias(libs.plugins.xxx)` 应用。
-- 库模块里出现在 public API 上的类型用 `api(...)`，纯实现细节用 `implementation(...)`。
-
-## 常用命令
-
-```bash
-./gradlew :core:test          # 纯逻辑单测（最快）
-./gradlew :app:assembleDebug  # 打包 debug
-./gradlew :base:lintDebug     # 静态检查
-```
-
-## 待办
-
-- [ ] 玩法模块（棋盘/存档/音效/渲染循环）
-- [ ] 依赖注入（Hilt 或手写 ServiceLocator）
-- [ ] 日志（Timber）
-- [ ] 页面路由
-- [ ] 平板/横屏尺寸（`values-sw600dp`、`values-land`）
+依赖坐标和版本只写在 `gradle/libs.versions.toml`，模块里不允许出现带版本号的依赖。
+插件版本在根 `build.gradle.kts` 用 `apply false` 声明。
