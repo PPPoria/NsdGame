@@ -9,7 +9,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    tools:context=".ui.RoomActivity">
+    tools:context=".ui.room.RoomActivity">
 
     <!-- 顶部：房间名 + 一行状态 + 离开 -->
     <LinearLayout

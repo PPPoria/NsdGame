@@ -21,7 +21,7 @@ import java.io.ByteArrayOutputStream
 object Avatars {
 
     /** 头像最长边。压缩到至多 512px；512 的 WebP q80 一般 20–60KB。 */
-    const val MAX_SIDE = 512
+    private const val MAX_SIDE = 512
 
     private const val QUALITY = 80
 
@@ -30,7 +30,7 @@ object Avatars {
      *
      * @return 编码好的字节；读不出来（损坏、权限、不是图片）返回 `null`
      */
-    fun encode(context: Context, uri: Uri): ByteArray? = runCatching {
+    fun encode(context: Context, uri: Uri): AvatarBytes? = runCatching {
         val source = ImageDecoder.createSource(context.contentResolver, uri)
         val decoded = ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
             // 先降到"裁完还剩 512~1024"的量级，再精确缩放，避免解一张 4000px 的原图
@@ -50,11 +50,13 @@ object Avatars {
             scaled.compress(Bitmap.CompressFormat.WEBP_LOSSY, QUALITY, out)
             out.toByteArray()
         }
-    }.getOrNull()
+    }.getOrNull()?.let { AvatarBytes(it) }
 
     /** 把编好的头像字节解成小图（预览、座位卡都用它），失败返回 `null`。 */
-    fun decode(bytes: ByteArray): Bitmap? =
+    fun decode(avatar: AvatarBytes): Bitmap? = avatar.toByteArray().let { bytes ->
         runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull()
+    }
+
 
     /** 居中的最大正方形，不放大。 */
     private fun centerSquare(bitmap: Bitmap): Bitmap {
@@ -63,5 +65,18 @@ object Avatars {
         val left = (bitmap.width - side) / 2
         val top = (bitmap.height - side) / 2
         return Bitmap.createBitmap(bitmap, left, top, side, side)
+    }
+
+    class AvatarBytes(bytes: ByteArray) {
+        private val data: ByteArray = bytes.copyOf()   // 防御性拷贝，保证不可变
+
+        fun toByteArray(): ByteArray = data.copyOf()   // 对外也只给副本
+
+        override fun equals(other: Any?): Boolean =
+            other is AvatarBytes && data.contentEquals(other.data)
+
+        override fun hashCode(): Int = data.contentHashCode()
+
+        override fun toString(): String = "AvatarBytes(size=${data.size})"
     }
 }

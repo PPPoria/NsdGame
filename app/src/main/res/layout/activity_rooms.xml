@@ -9,7 +9,7 @@
     android:paddingTop="@dimen/space_l"
     android:paddingEnd="@dimen/space_l"
     android:paddingBottom="@dimen/space_m"
-    tools:context=".ui.RoomsActivity">
+    tools:context=".ui.rooms.RoomsActivity">
 
     <TextView
         android:layout_width="wrap_content"

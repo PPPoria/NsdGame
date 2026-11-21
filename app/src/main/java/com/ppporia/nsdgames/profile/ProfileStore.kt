@@ -1,11 +1,13 @@
 package com.ppporia.nsdgames.profile
 
 import com.poria.base.store.DSManager
+import com.ppporia.nsdgames.ui.Avatars
 import java.util.Base64
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -22,32 +24,22 @@ object ProfileStore {
     private const val KEY_NICKNAME = "profile.nickname"
     private const val KEY_AVATAR = "profile.avatar"
 
-    /**
-     * 进程级 scope：页面马上要停（`onStop` 的收尾写）时用，别跟着 Activity 一起被取消。
-     * 只做一次性的小写入，写失败也只是丢一次昵称，下次输入会再写。
-     */
-    private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    suspend fun nickname(): String =
-        runCatching { DSManager.getString(KEY_NICKNAME).first() }.getOrDefault("").trim()
+    val nicknameFlow = DSManager.getString(KEY_NICKNAME)
+    val avatarFlow = DSManager.getString(KEY_AVATAR).map { encoded ->
+        if (encoded.isEmpty()) null
+        else runCatching {
+            Base64.getDecoder().decode(encoded)
+        }.getOrNull()?.let {
+            Avatars.AvatarBytes(it)
+        }
+    }
 
     suspend fun saveNickname(name: String) {
         runCatching { DSManager.setString(KEY_NICKNAME, name.trim()) }
     }
 
-    /** 页面即将结束时用：不阻塞、也不会因为 `lifecycleScope` 被取消而丢掉这次写入。 */
-    fun saveNicknameAsync(name: String) {
-        io.launch { saveNickname(name) }
-    }
-
-    suspend fun avatar(): ByteArray? {
-        val encoded = runCatching { DSManager.getString(KEY_AVATAR).first() }.getOrDefault("")
-        if (encoded.isEmpty()) return null
-        return runCatching { Base64.getDecoder().decode(encoded) }.getOrNull()
-    }
-
-    suspend fun saveAvatar(bytes: ByteArray?) {
-        val encoded = bytes?.let { Base64.getEncoder().encodeToString(it) }.orEmpty()
+    suspend fun saveAvatar(avatar: Avatars.AvatarBytes?) {
+        val encoded = avatar?.let { Base64.getEncoder().encodeToString(it.toByteArray()) }.orEmpty()
         runCatching { DSManager.setString(KEY_AVATAR, encoded) }
     }
 }

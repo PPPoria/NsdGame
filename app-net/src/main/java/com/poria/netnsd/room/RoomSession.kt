@@ -1,6 +1,7 @@
 package com.poria.netnsd.room
 
 import android.content.Context
+import android.content.Intent
 import com.poria.net.CloseCause
 import com.poria.net.Peer
 import com.poria.net.PeerListener
@@ -26,6 +27,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.random.Random
 
 /**
  * 一个"游戏准备房间"会话：把 `:core` 的连接、NSD 的端口广播、[Room] 的房间规则缝在一起，
@@ -503,7 +505,7 @@ class RoomSession private constructor(
         private const val LOOPBACK = "127.0.0.1"
 
         /** 同一条连接上最多同时发几张图。再多就回一句"稍后再试"，别让对端一次拉爆 FD。 */
-        private const val MAX_STREAMS_PER_PEER = 4
+        private const val MAX_STREAMS_PER_PEER = 20
 
         /** 等一张图最多等多久，超时就把占位撤掉（UI 下次重画会再要一次）。 */
         private const val BLOB_TIMEOUT_MS = 30_000L

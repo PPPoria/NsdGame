@@ -1,4 +1,4 @@
-package com.ppporia.nsdgames.ui
+package com.ppporia.nsdgames.ui.rooms
 
 import android.view.LayoutInflater
 import android.view.ViewGroup

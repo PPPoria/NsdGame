@@ -16,7 +16,7 @@
             android:name=".ui.azul.AzulDesktopActivity"
             android:exported="false" />
         <activity
-            android:name=".ui.RoomsActivity"
+            android:name=".ui.rooms.RoomsActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:exported="true">
             <intent-filter>
@@ -34,10 +34,10 @@
           房主转个屏幕就把整屋人踢下线，不能接受。
         -->
         <activity
-            android:name=".ui.RoomActivity"
+            android:name=".ui.room.RoomActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:exported="false"
-            android:parentActivityName=".ui.RoomsActivity"
+            android:parentActivityName=".ui.rooms.RoomsActivity"
             android:windowSoftInputMode="adjustResize" />
     </application>
 

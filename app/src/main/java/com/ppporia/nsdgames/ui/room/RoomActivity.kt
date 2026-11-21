@@ -1,7 +1,5 @@
-package com.ppporia.nsdgames.ui
+package com.ppporia.nsdgames.ui.room
 
-import android.content.Context
-import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.core.view.WindowInsetsCompat
@@ -10,14 +8,13 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import com.poria.base.ext.setOnClickListenerWithClickAnimation
 import com.poria.base.ui.BaseActivity
 import com.poria.core.game.GameCatalog
-import com.poria.netnsd.FoundHost
 import com.poria.netnsd.room.RoomSession
 import com.poria.netnsd.room.RoomSnapshot
 import com.poria.netnsd.room.RoomState
 import com.poria.netnsd.room.SessionPhase
 import com.ppporia.nsdgames.R
 import com.ppporia.nsdgames.databinding.ActivityRoomBinding
-import kotlin.random.Random
+import com.ppporia.nsdgames.utils.openRoomSession
 
 /**
  * 游戏准备房间页。房主和客人跑的是同一个 Activity：
@@ -40,10 +37,11 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
     /** 头像 id → 解好的小图。同一次会话里每个人最多解一次（512px WebP，解码就几毫秒）。 */
     private val avatarBitmaps = HashMap<String, Bitmap>()
 
-    override fun onCreateBinding(): ActivityRoomBinding = ActivityRoomBinding.inflate(layoutInflater)
+    override fun onCreateBinding(): ActivityRoomBinding =
+        ActivityRoomBinding.inflate(layoutInflater)
 
     override fun initView() {
-        session = openSession()
+        session = openRoomSession()
 
         actionsBasePadding = binding.rowActions.paddingBottom
 
@@ -51,7 +49,8 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
             LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
         binding.recyclerSeats.adapter = seatAdapter
 
-        binding.recyclerMessages.layoutManager = LinearLayoutManager(this).apply { stackFromEnd = true }
+        binding.recyclerMessages.layoutManager =
+            LinearLayoutManager(this).apply { stackFromEnd = true }
         binding.recyclerMessages.adapter = messageAdapter
 
         settingsSheet = RoomSettingsSheet(this).apply {
@@ -118,7 +117,8 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
         val snapshot = next.snapshot
         val game = snapshot?.let { GameCatalog.byId(it.gameId) }
 
-        binding.textTitle.text = snapshot?.roomName?.takeIf { it.isNotBlank() } ?: getString(R.string.room_title)
+        binding.textTitle.text =
+            snapshot?.roomName?.takeIf { it.isNotBlank() } ?: getString(R.string.room_title)
         binding.textSubtitle.text = if (snapshot == null || game == null) {
             getString(R.string.room_connecting_short)
         } else {
@@ -199,7 +199,8 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
     private fun avatarOf(id: String): Bitmap? {
         avatarBitmaps[id]?.let { return it }
         val file = session?.blobFile(id) ?: return null
-        val bitmap = runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull() ?: return null
+        val bitmap =
+            runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull() ?: return null
         avatarBitmaps[id] = bitmap
         return bitmap
     }
@@ -239,76 +240,5 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
             onSwap = { a, b -> session?.swapSeats(a, b) },
             onKick = { session?.kick(it) },
         )
-    }
-
-    private fun openSession(): RoomSession? {
-        val player = intent.getStringExtra(EXTRA_PLAYER).orEmpty()
-            .ifBlank { getString(R.string.default_nickname, Random.nextInt(10, 100)) }
-        val avatar = intent.getByteArrayExtra(EXTRA_AVATAR)
-
-        if (intent.getBooleanExtra(EXTRA_HOST, false)) {
-            return RoomSession.host(this, intent.getStringExtra(EXTRA_ROOM).orEmpty(), player, avatar)
-        }
-
-        val address = intent.getStringExtra(EXTRA_ADDRESS)
-        val port = intent.getIntExtra(EXTRA_PORT, 0)
-        if (address == null || port <= 0) {
-            finish()
-            return null
-        }
-        return RoomSession.guest(
-            this,
-            FoundHost(
-                serviceName = intent.getStringExtra(EXTRA_ROOM).orEmpty(),
-                host = address,
-                port = port,
-            ),
-            player,
-            avatar,
-        )
-    }
-
-    companion object {
-
-        private const val EXTRA_HOST = "extra_host"
-        private const val EXTRA_ROOM = "extra_room"
-        private const val EXTRA_ADDRESS = "extra_address"
-        private const val EXTRA_PORT = "extra_port"
-        private const val EXTRA_PLAYER = "extra_player"
-        private const val EXTRA_AVATAR = "extra_avatar"
-
-        /** 开一间房：起服务端 + 广播端口 + 自己回环连上来。 */
-        fun startHost(
-            context: Context,
-            roomName: String,
-            playerName: String,
-            avatar: ByteArray? = null,
-        ) {
-            context.startActivity(
-                Intent(context, RoomActivity::class.java)
-                    .putExtra(EXTRA_HOST, true)
-                    .putExtra(EXTRA_ROOM, roomName)
-                    .putExtra(EXTRA_PLAYER, playerName)
-                    .putExtra(EXTRA_AVATAR, avatar)
-            )
-        }
-
-        /** 加入搜到的房间。 */
-        fun startGuest(
-            context: Context,
-            target: FoundHost,
-            playerName: String,
-            avatar: ByteArray? = null,
-        ) {
-            context.startActivity(
-                Intent(context, RoomActivity::class.java)
-                    .putExtra(EXTRA_HOST, false)
-                    .putExtra(EXTRA_ROOM, target.serviceName)
-                    .putExtra(EXTRA_ADDRESS, target.host)
-                    .putExtra(EXTRA_PORT, target.port)
-                    .putExtra(EXTRA_PLAYER, playerName)
-                    .putExtra(EXTRA_AVATAR, avatar)
-            )
-        }
     }
 }

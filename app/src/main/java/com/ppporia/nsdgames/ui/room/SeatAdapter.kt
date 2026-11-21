@@ -1,4 +1,4 @@
-package com.ppporia.nsdgames.ui
+package com.ppporia.nsdgames.ui.room
 
 import android.graphics.Bitmap
 import android.view.LayoutInflater
