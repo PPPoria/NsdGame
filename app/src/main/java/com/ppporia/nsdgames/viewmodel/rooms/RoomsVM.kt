@@ -28,7 +28,7 @@ private const val NICKNAME_SAVE_DEBOUNCE_MS = 500L
 class RoomsVM : ViewModel() {
     private val pendingNickname = MutableStateFlow<String?>(null)
     private val roomsFlow = MutableStateFlow(LinkedHashMap<String, FoundHost>())
-    private var roomFoundNoteFlow = MutableStateFlow<String?>(null)
+    private val roomFoundNoteFlow = MutableStateFlow<String?>(null)
     val state = combine(
         ProfileStore.nicknameFlow,
         ProfileStore.avatarFlow,

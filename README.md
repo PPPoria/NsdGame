@@ -44,16 +44,20 @@ base/                     Android 基础设施（可复用的，跟游戏无关�
   res/values/dimens.xml  ★ 圆角/间距/字号的唯一来源（corner_s / corner_m / corner_l）
   res/drawable/bg_corner_*  纯色 + 圆角的通用底：房间页的弹窗、拖拽把手都用它
 
-app/                      唯一的应用模块：只有 UI
+app/                      唯一的应用模块：UI + MVI 的 ViewModel
   src/main/java/com/ppporia/nsdgames/
-    ui/RoomsActivity.kt   首页：头像 + 昵称 + 创建房间 + 搜到的房间列表（头像/昵称存 DataStore，输入防抖）
-    ui/RoomActivity.kt    游戏准备房间（房主与客人共用同一个页面）
-    ui/RoomAdapter.kt     房间列表适配器
-    ui/SeatAdapter.kt     座位条：座位号 = 出手顺序（有头像就画头像）
-    ui/MessageAdapter.kt  聊天列表（自己的靠右、别人的靠左带昵称）
-    ui/RoomSettingsSheet.kt  底部弹出的房间设置（选游戏 / 牌桌人数 / 玩法开关）
-    ui/SeatSheet.kt       点座位弹出的动作面板（入座 / 换座 / 请人离开）
-    ui/Avatars.kt         头像处理：居中裁正方形 + 缩到 ≤512px + WebP（选中图后预览/编码）
+    ui/rooms/RoomsActivity.kt    首页（纯 View 层）：渲染 + 把动作转给 RoomsVM
+    ui/rooms/RoomAdapter.kt      房间列表适配器
+    ui/room/RoomActivity.kt      游戏准备房间（纯 View 层，房主与客人共用）
+    ui/room/SeatAdapter.kt       座位条：座位号 = 出手顺序（有头像就画头像）
+    ui/room/MessageAdapter.kt    聊天列表（自己的靠右、别人的靠左带昵称）
+    ui/room/RoomSettingsSheet.kt 底部弹出的房间设置（选游戏 / 牌桌人数 / 玩法开关）
+    ui/room/SeatSheet.kt         点座位弹出的动作面板（入座 / 换座 / 请人离开）
+    ui/Avatars.kt                头像处理：居中裁正方形 + 缩到 ≤512px + WebP
+    viewmodel/rooms/RoomsVM.kt   ★ 首页的 MVI ViewModel：昵称防抖落盘、房间列表、头像编码
+    viewmodel/room/RoomVM.kt     ★ 房间的 MVI ViewModel：持有 RoomSession，把快照拍平成 RoomUiState
+    profile/ProfileStore.kt      昵称/头像的 DataStore 读写
+    utils/SessionExt.kt          Intent ↔ RoomSession（开房/加入的 extras 都在这）
 ```
 
 依赖方向：`:app` → `:base` → `:core`，以及 `:app` → `:app-net` → `:core`。反向依赖编译不过。
@@ -67,7 +71,11 @@ TcpServer / Tcp.connect             只知道"连上、发一行、收一行"（
         ↓ Peer（房主和客人拿到的是同一个类型）
 RoomProtocol / Room                 只知道"谁是谁、谁坐哪、设置是什么、该发给谁"（纯 Kotlin，不碰 socket）
         ↓ RoomSnapshot（整份权威快照）
-RoomSession → RoomActivity          只管画和点
+RoomSession                         持有连接/快照，发命令（StateFlow<RoomState>）
+        ↓
+RoomVM                              把快照拍平成 RoomUiState（MVI），页面销毁时关会话
+        ↓
+RoomActivity                        只管画和点：collect → render，点击 → vm.xxx()
 ```
 
 ## 房主自己也是一个客户端（走回环）
@@ -198,8 +206,9 @@ val host = Tcp.connect(ip, port, guestSession)
 | 房间规则（谁能改什么、广播给谁） | `app-net/.../room/Room.kt` |
 | 开房/加入的流程 | `app-net/.../room/RoomSession.kt` |
 | 房间怎么被局域网发现 | `app-net/.../ServiceAdvertiser.kt`、`ServiceDiscovery.kt` |
-| 首页长什么样 / 列表点了之后干什么 | `app/.../ui/RoomsActivity.kt` |
-| 房间页长什么样 / 座位条 / 设置面板 | `app/.../ui/RoomActivity.kt`、`SeatAdapter.kt`、`RoomSettingsSheet.kt`、`SeatSheet.kt` |
+| 首页长什么样 / 列表点了之后干什么 | `app/.../ui/rooms/RoomsActivity.kt`、`viewmodel/rooms/RoomsVM.kt` |
+| 房间页长什么样 / 座位条 / 设置面板 | `app/.../ui/room/RoomActivity.kt`、`SeatAdapter.kt`、`RoomSettingsSheet.kt`、`SeatSheet.kt` |
+| 房间状态怎么拍平成 UI 状态 | `app/.../viewmodel/room/RoomVM.kt`（`RoomUiState`） |
 | 圆角 / 间距 / 字号 | `base/res/values/dimens.xml`（**别在 app 里写魔法值**） |
 
 ## 架构硬约束（以后让 AI 写代码时把这段贴给它）
@@ -219,7 +228,9 @@ val host = Tcp.connect(ip, port, guestSession)
 5. 规则判定只能写在 `:core`。UI 或 session 里出现"这张牌能不能出""现在能不能开局"的判断就是 bug——
    应该问 `GameCatalog` / 让服务端的 `Room` 给出 `startHint` 或拒绝原因。
 6. **客户端不许有自己的房间状态**。花名册、座位、设置、聊天记录都只能来自服务端推来的快照；
-   客户端"先改本地再等服务端确认"是 bug（两份真相）。
+   客户端"先改本地再等服务端确认"是 bug（两份真相）。页面（Activity）连本地数据都不许攒：
+   状态在 ViewModel 里、ViewModel 的状态来自快照，Activity 只渲染，最多留一个"最近一次状态"
+   给弹面板时读一眼。
 7. 新文件先按 200 行估一遍，超了就想想是不是在造框架。
 8. 每个功能一次做完再做下一个，不要预留"以后可能要"的扩展点。
 9. **图片不进快照**：快照里只放 id，字节走 `BLOB` 分块；一块 ≤3KB（base64 后 ~4.2KB），
@@ -239,8 +250,8 @@ val host = Tcp.connect(ip, port, guestSession)
   `Channel` + 挂起 `for` 循环），以及房间这一层（协议 / 房间规则 / 会话）。`Room` 刻意
   不碰 socket（只收成员给的 `send` / `close` 回调），所以房间规则能在 JVM 上单测；
   `RoomSession` 才把它们缝起来。
-- `:app` **只有 UI**：不解析协议、不判断谁能改设置（按钮灰不灰跟着快照走），
-  `RoomActivity` 只做 `state.collect { render }` + 发命令。
+- `:app` **只有 UI + MVI**：`RoomVM` / `RoomsVM` 持有会话和状态，Activity 只做
+  `vm.state.collect { render }` + 把点击转给 VM；不解析协议、不判断谁能改设置（按钮灰不灰跟着快照走）。
 - 线程：`TcpServer.start` / `Tcp.connect` 是**阻塞**的，别在主线程调（`RoomSession` 已放进协程）；
   `ServiceAdvertiser` / `ServiceDiscovery` 的方法**必须**在主线程调（NsdManager 要 Looper），
   `RoomSession.close()` 也是（它要注销广播）。`Peer` 的回调在那条连接的读线程上按序到达，

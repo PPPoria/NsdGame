@@ -58,15 +58,24 @@ app-net/.../            可用协程 + Android API
   room/BlobStore.kt      图片仓库（房主/客户端共用）：sha1 内容寻址、分块拼装、hash 校验、LRU 配额
   room/BlobSender.kt     把一份图按 3KB 一块发给一个 peer
 
-app/.../ui/              只画和点
-  RoomsActivity.kt       首页：头像 + 昵称 / 创建房间 / 搜到的房间列表
-  RoomActivity.kt        游戏准备房间（房主与客人共用）
+app/.../ui/rooms/        首页（纯 View 层）
+  RoomsActivity.kt       头像 + 昵称 / 创建房间 / 搜到的房间列表
   RoomAdapter.kt         房间列表（ListAdapter）
+
+app/.../ui/room/         房间页（纯 View 层，只渲染 RoomUiState）
+  RoomActivity.kt        游戏准备房间（房主与客人共用）
   SeatAdapter.kt         座位条（座位号 = 出手顺序，有头像就画头像）
   MessageAdapter.kt      聊天列表（自己的靠右、别人的靠左带昵称）
   RoomSettingsSheet.kt   底部设置面板：选游戏 / 牌桌人数 / 玩法开关
   SeatSheet.kt           点座位弹出的动作面板：入座 / 换座 / 请人离开
-  Avatars.kt             头像：选中图后居中裁正方形 + 缩到 ≤512px + WebP（ImageDecoder 自动转正）
+
+app/.../viewmodel/       MVI 的 ViewModel（状态和会话都在这里）
+  rooms/RoomsVM.kt       首页：昵称防抖落盘、头像编码、房间列表、NSD 错误提示
+  room/RoomVM.kt         房间：持有 RoomSession，把 RoomState 拍平成 RoomUiState + 转发动作
+
+app/.../ui/Avatars.kt    头像：选中图后居中裁正方形 + 缩到 ≤512px + WebP（ImageDecoder 自动转正）
+app/.../profile/ProfileStore.kt  昵称/头像的 DataStore 读写
+app/.../utils/SessionExt.kt      Intent ↔ RoomSession 的 extras
 ```
 
 ## 3. 协议：服务端权威快照
@@ -207,6 +216,25 @@ RoomSnapshot { version, roomName, hostId, phase, gameId, tableSize, startHint,
 - `close()` **必须在主线程**（要注销 NSD 广播），并且会取消 scope；启动过程中被关掉的话，
   代码里用 `scope.isActive` 挡了"已经注册的广播"和"刚连上的 socket"，
   避免留一个挂在局域网里的房间。
+- **谁调 `close()`**：`RoomVM.onCleared()`。ViewModel 在 `onDestroy` 里被清（转屏重建时不清），
+  所以"转屏不踢人"和"退出一定收摊"都由它保证；`RoomActivity.onDestroy` 只关弹窗。
+
+### 4.1 RoomVM：把快照拍平成 UI 状态（MVI）
+
+```
+RoomSession.state: StateFlow<RoomState>   （服务端快照 + 连接状态，协议形状）
+        ↓  RoomVM（stateIn，WhileSubscribed）
+RoomUiState                                 （UI 形状：座位/消息/按钮文案的数据）
+        ↓  collect { render(it) }
+RoomActivity                                （只拼字符串、解 Bitmap、弹面板）
+```
+
+- VM 的输入只有 `session.state`；**没有一个字段是客户端算出来的房间数据**（`startHint` 也是服务端给的）。
+- VM 的副作用只有两件：`init` 里给缺图的人发 `requestBlob`（会话自带去重）、`onCleared` 里 `session.close()`。
+- Activity 里唯一的"状态"是 `private var uiState`（最近一次渲染结果），只用于弹面板前读快照；
+  业务数据一律从 VM 来。
+- `RoomUiState` / `SeatUi` / `SeatTag` 定义在 `viewmodel/room/RoomVM.kt`：状态里**不放字符串**，
+  座位标签是枚举（`HOST/READY/WAITING/NONE`），由 Activity 换成 `R.string`。
 
 ## 5. 线程约定（最容易写错的地方）
 
@@ -226,12 +254,12 @@ UI 侧一律"收 `StateFlow` → 渲染"，所以**任何地方都不用自己 `
 - **搜索只在页面可见时跑**：`BaseActivity.bindUi` 里 `startDiscovery()` + `awaitCancellation()`，
   `finally` 里 `stopDiscovery()`。NSD 没有"刷新"，重扫就是 stop + start，正好对上 STARTED 生命周期。
 - **转屏不重建 Activity**（两个页面都配了 `configChanges`）：房间页一旦重建就会
-  `onDestroy → session.close()`，房主转个屏整屋人掉线。
+  跑 `onDestroy`，会话在 ViewModel 里才不会被误关（以前放在 Activity 里，重建就整屋人掉线）。
 - **键盘**：manifest `adjustResize` + `onWindowInsetsChanged` 里把 `ime.bottom - systemBars.bottom`
   补在**最后一行**（`rowActions`）的 bottom padding 上，整列会被顶上来；
   不要直接用 `ime.bottom`（会和 `BaseActivity` 已加的系统栏内边距叠加）。
 - **消息列表按服务端 `seq` 做 DiffUtil key**：连发两个相同的"好"必须是两条。
-- **座位条按座位号做 key**，内容是纯函数（`RoomActivity.seatItems`）：人变了就整格重画。
+- **座位条按座位号做 key**，内容是纯函数（VM 的 `seatModels` + Activity 的 `seatItems`）：人变了就整格重画。
 - **设置面板每次 `render` 都照着快照重画**：先摘监听 → 落选中态/开关 → 再挂监听，
   否则"同步"会被当成"用户点了"，命令回环。
 - **本机资料要落盘**：昵称和头像是在首页定的，存在 base 的 `DSManager`（DataStore）里

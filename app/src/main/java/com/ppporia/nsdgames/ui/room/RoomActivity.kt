@@ -2,47 +2,56 @@ package com.ppporia.nsdgames.ui.room
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.activity.viewModels
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.poria.base.ext.setOnClickListenerWithClickAnimation
 import com.poria.base.ui.BaseActivity
-import com.poria.core.game.GameCatalog
-import com.poria.netnsd.room.RoomSession
-import com.poria.netnsd.room.RoomSnapshot
-import com.poria.netnsd.room.RoomState
 import com.poria.netnsd.room.SessionPhase
 import com.ppporia.nsdgames.R
 import com.ppporia.nsdgames.databinding.ActivityRoomBinding
 import com.ppporia.nsdgames.utils.openRoomSession
+import com.ppporia.nsdgames.viewmodel.room.RoomUiState
+import com.ppporia.nsdgames.viewmodel.room.RoomVM
+import com.ppporia.nsdgames.viewmodel.room.SeatTag
 
 /**
- * 游戏准备房间页。房主和客人跑的是同一个 Activity：
+ * 游戏准备房间页，**纯 View 层**：
  *
- * - 开房 / 加入的差别只在 Intent Extras，会话内部对 UI 不可见；
- * - **页面不存任何房间状态**：`state.collect { render }`，`render` 只读服务端快照；
- * - 所有按钮都只是"发一条命令"，界面要等服务端推回新快照才动。
+ * - 房间数据全在 [RoomVM] 里（而 ViewModel 那边来自服务端快照），这里
+ *   `vm.state.collect { render(it) }`，不存花名册 / 座位 / 消息；
+ * - 按钮只调 VM 的方法，不本地改状态——界面要等服务端推回新快照才动；
+ * - 这个类只做四件事：拼字符串（i18n）、把头像 id 解成 Bitmap、弹面板、处理键盘内边距。
+ *
+ * 房主和客人跑的是同一个页面：开房 / 加入的差别只在 Intent，会话由 [openRoomSession] 建好后
+ * 交给 [RoomVM]，页面本身完全不知道自己是哪一边。
  */
 class RoomActivity : BaseActivity<ActivityRoomBinding>() {
 
-    private var session: RoomSession? = null
-    private var settingsSheet: RoomSettingsSheet? = null
+    private val vm: RoomVM by viewModels {
+        viewModelFactory { initializer { RoomVM(openRoomSession()) } }
+    }
+
     private val seatAdapter = SeatAdapter { seat -> openSeatSheet(seat) }
     private val messageAdapter = MessageAdapter()
+    private var settingsSheet: RoomSettingsSheet? = null
 
-    private var state = RoomState()
+    /** 最近一次渲染的状态：只给"弹面板前读一眼"用，房间数据在 [vm] 里。 */
+    private var uiState = RoomUiState()
+
+    /** 头像 id → 解好的小图。同一次会话里每人最多解一次（512px WebP，解码几毫秒）。 */
+    private val avatarBitmaps = HashMap<String, Bitmap>()
+
     private var lastMessageSeq = -1
     private var actionsBasePadding = 0
-
-    /** 头像 id → 解好的小图。同一次会话里每个人最多解一次（512px WebP，解码就几毫秒）。 */
-    private val avatarBitmaps = HashMap<String, Bitmap>()
 
     override fun onCreateBinding(): ActivityRoomBinding =
         ActivityRoomBinding.inflate(layoutInflater)
 
     override fun initView() {
-        session = openRoomSession()
-
         actionsBasePadding = binding.rowActions.paddingBottom
 
         binding.recyclerSeats.layoutManager =
@@ -56,15 +65,15 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
         settingsSheet = RoomSettingsSheet(this).apply {
             listener = object : RoomSettingsSheet.Listener {
                 override fun onSelectGame(gameId: String) {
-                    session?.selectGame(gameId)
+                    vm.selectGame(gameId)
                 }
 
                 override fun onTableSize(size: Int) {
-                    session?.setTableSize(size)
+                    vm.setTableSize(size)
                 }
 
                 override fun onOption(optionId: String, on: Boolean) {
-                    session?.setOption(optionId, on)
+                    vm.setOption(optionId, on)
                 }
             }
         }
@@ -74,15 +83,12 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
         binding.buttonLeave.setOnClickListenerWithClickAnimation { finish() }
         binding.buttonSend.setOnClickListenerWithClickAnimation(debounceMillis = 300) { send() }
         binding.buttonSettings.setOnClickListenerWithClickAnimation { openSettings() }
-        binding.buttonReady.setOnClickListenerWithClickAnimation {
-            // 只是把"我认为的当前状态取反"当作请求发出去，真正生效以服务端快照为准
-            session?.setReady(!state.iAmReady)
-        }
-        binding.buttonStart.setOnClickListenerWithClickAnimation { session?.start() }
+        binding.buttonReady.setOnClickListenerWithClickAnimation { vm.toggleReady() }
+        binding.buttonStart.setOnClickListenerWithClickAnimation { vm.start() }
     }
 
     override suspend fun bindUi() {
-        session?.state?.collect { render(it) }
+        vm.state.collect { render(it) }
     }
 
     /**
@@ -102,143 +108,124 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
     }
 
     override fun onDestroy() {
-        // close() 必须在主线程：它要调 NsdManager 注销广播。Activity 生命周期回调就是主线程。
+        // 会话在 RoomVM.onCleared() 里关（它也要在主线程，而且转屏重建时不该被关）
         settingsSheet?.dismiss()
         settingsSheet = null
-        session?.close()
-        session = null
         super.onDestroy()
     }
 
-    // ── 渲染（只读快照）────────────────────────────────────────────────────
+    // ── 渲染（只读 UI 状态）────────────────────────────────────────────────
 
-    private fun render(next: RoomState) {
-        state = next
-        val snapshot = next.snapshot
-        val game = snapshot?.let { GameCatalog.byId(it.gameId) }
+    private fun render(state: RoomUiState) {
+        uiState = state
 
-        binding.textTitle.text =
-            snapshot?.roomName?.takeIf { it.isNotBlank() } ?: getString(R.string.room_title)
-        binding.textSubtitle.text = if (snapshot == null || game == null) {
-            getString(R.string.room_connecting_short)
+        binding.textTitle.text = state.title.ifBlank { getString(R.string.room_title) }
+        binding.textSubtitle.text = if (state.gameKnown && state.snapshot != null) {
+            getString(R.string.room_header, state.gameTitle, state.playerCount, state.tableSize)
         } else {
-            getString(R.string.room_header, game.title, snapshot.players.size, snapshot.tableSize)
+            getString(R.string.room_connecting_short)
         }
-        binding.textStatus.text = when {
-            next.note != null -> next.note
-            next.phase == SessionPhase.CLOSED -> getString(R.string.room_status_closed)
-            next.phase == SessionPhase.CONNECTING -> getString(R.string.room_status_connecting)
-            snapshot != null && snapshot.hostId.isEmpty() -> getString(R.string.room_status_hostless)
+        binding.textStatus.text = state.note ?: when {
+            state.phase == SessionPhase.CLOSED -> getString(R.string.room_status_closed)
+            state.phase == SessionPhase.CONNECTING -> getString(R.string.room_status_connecting)
+            state.hostless -> getString(R.string.room_status_hostless)
             else -> getString(R.string.room_status_online)
         }
 
-        // 谁有头像但本机还没有，就去要一张（session 自己会去重，重画多少次都无所谓）
-        snapshot?.players?.forEach { player ->
-            if (player.avatar.isNotEmpty()) session?.requestBlob(player.avatar)
-        }
-
-        seatAdapter.submitList(seatItems(snapshot, next))
+        seatAdapter.submitList(seatItems(state))
         binding.textSeatsHint.text = when {
-            !next.online -> getString(R.string.room_seats_hint_readonly)
-            next.iAmHost -> getString(R.string.room_seats_hint_host)
+            !state.online -> getString(R.string.room_seats_hint_readonly)
+            state.host -> getString(R.string.room_seats_hint_host)
             else -> getString(R.string.room_seats_hint_guest)
         }
 
-        messageAdapter.submitList(messagesOf(snapshot, next.myId))
-        scrollToLatest(snapshot)
+        messageAdapter.submitList(state.messages)
+        scrollToLatest(state)
 
-        renderActions(next)
-        settingsSheet?.render(snapshot, next.iAmHost, next.online)
+        renderActions(state)
+        settingsSheet?.render(state.snapshot, state.host, state.online)
     }
 
-    private fun renderActions(state: RoomState) {
-        val snapshot = state.snapshot
-        val host = state.iAmHost
-        val ready = state.online && snapshot != null
+    private fun renderActions(state: RoomUiState) {
+        val canAct = state.canAct
 
-        binding.buttonReady.isVisible = !host
-        binding.buttonStart.isVisible = host
+        binding.buttonReady.isVisible = !state.host
+        binding.buttonStart.isVisible = state.host
 
-        binding.buttonReady.isEnabled = ready
+        binding.buttonReady.isEnabled = canAct
         binding.buttonReady.text =
-            getString(if (state.iAmReady) R.string.room_cancel_ready else R.string.room_ready)
+            getString(if (state.ready) R.string.room_cancel_ready else R.string.room_ready)
 
         // "还不能开"的原因由服务端给（startHint），这里只负责摆在按钮上，不自己判规则
-        val hint = snapshot?.startHint.orEmpty()
-        binding.buttonStart.text = if (hint.isEmpty()) getString(R.string.room_start) else hint
-        binding.buttonStart.isEnabled = ready && hint.isEmpty()
+        binding.buttonStart.text =
+            state.startHint.ifEmpty { getString(R.string.room_start) }
+        binding.buttonStart.isEnabled = canAct && state.startHint.isEmpty()
 
-        binding.buttonSettings.isEnabled = ready
+        binding.buttonSettings.isEnabled = canAct
     }
 
-    /** 座位条：座位号来自快照的 tableSize，人来自快照的 players（客户端不自己攒）。 */
-    private fun seatItems(snapshot: RoomSnapshot?, state: RoomState): List<SeatInfo> {
-        if (snapshot == null) return emptyList()
-        return (0 until snapshot.tableSize).map { seat ->
-            val player = snapshot.playerAt(seat)
-            SeatInfo(
-                seat = seat,
-                name = if (player == null) getString(R.string.room_seat_empty) else player.name,
-                tag = when {
-                    player == null -> ""
-                    player.host -> getString(R.string.room_seat_host)
-                    player.ready -> getString(R.string.room_seat_ready)
-                    else -> getString(R.string.room_seat_waiting)
-                },
-                occupied = player != null,
-                mine = player != null && player.id == state.myId,
-                avatar = player?.avatar?.takeIf { it.isNotEmpty() }?.let { avatarOf(it) },
-            )
-        }
+    private fun seatItems(state: RoomUiState): List<SeatInfo> = state.seats.map { seat ->
+        SeatInfo(
+            seat = seat.seat,
+            name = seat.name ?: getString(R.string.room_seat_empty),
+            tag = when (seat.tag) {
+                SeatTag.HOST -> getString(R.string.room_seat_host)
+                SeatTag.READY -> getString(R.string.room_seat_ready)
+                SeatTag.WAITING -> getString(R.string.room_seat_waiting)
+                SeatTag.NONE -> ""
+            },
+            occupied = seat.name != null,
+            mine = seat.mine,
+            avatar = seat.avatarId.takeIf { it.isNotEmpty() }?.let { avatarOf(it) },
+        )
     }
 
     /**
-     * 头像 id → 小图。没有（还没拉回来）就返回 null，座位卡先不画头像；
-     * 拉回来之后快照/`availableBlobs` 会再推一次状态，这里再解码一次就有了。
+     * 头像 id → 小图。没有（还没拉回来）就返回 `null`，座位卡先不画头像；
+     * 拉回来之后 ViewModel 会再推一次状态，这里就能取到了。
      */
     private fun avatarOf(id: String): Bitmap? {
         avatarBitmaps[id]?.let { return it }
-        val file = session?.blobFile(id) ?: return null
+        val file = vm.blobFile(id) ?: return null
         val bitmap =
             runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull() ?: return null
         avatarBitmaps[id] = bitmap
         return bitmap
     }
 
-    private fun scrollToLatest(snapshot: RoomSnapshot?) {
-        val last = snapshot?.messages?.lastOrNull()?.seq ?: return
+    private fun scrollToLatest(state: RoomUiState) {
+        val last = state.messages.lastOrNull()?.seq ?: return
         if (last == lastMessageSeq) return
         lastMessageSeq = last
-        val count = snapshot.messages.size
-        if (count > 0) binding.recyclerMessages.scrollToPosition(count - 1)
+        binding.recyclerMessages.scrollToPosition(state.messages.size - 1)
     }
 
-    // ── 动作（都只是发命令）────────────────────────────────────────────────
+    // ── 动作（都只是转给 ViewModel）────────────────────────────────────────
 
     private fun send() {
         val text = binding.editMessage.text?.toString()?.trim().orEmpty()
         if (text.isEmpty()) return
-        session?.say(text)
+        vm.say(text)
         binding.editMessage.setText("")
     }
 
     private fun openSettings() {
-        val snapshot = state.snapshot ?: return
-        settingsSheet?.show(snapshot, state.iAmHost, state.online)
+        val snapshot = uiState.snapshot ?: return
+        settingsSheet?.show(snapshot, uiState.host, uiState.online)
     }
 
     private fun openSeatSheet(seat: Int) {
-        val snapshot = state.snapshot ?: return
-        if (!state.online) return
+        val snapshot = uiState.snapshot ?: return
+        if (!uiState.online) return
         showSeatSheet(
             activity = this,
             seat = seat,
             snapshot = snapshot,
-            myId = state.myId,
-            canArrange = state.iAmHost,
-            onTakeSeat = { session?.takeSeat(it) },
-            onSwap = { a, b -> session?.swapSeats(a, b) },
-            onKick = { session?.kick(it) },
+            myId = uiState.myId,
+            canArrange = uiState.host,
+            onTakeSeat = { vm.takeSeat(it) },
+            onSwap = { a, b -> vm.swapSeats(a, b) },
+            onKick = { vm.kick(it) },
         )
     }
 }

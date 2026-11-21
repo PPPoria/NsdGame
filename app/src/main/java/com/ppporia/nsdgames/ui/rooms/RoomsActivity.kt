@@ -61,6 +61,9 @@ class RoomsActivity : BaseActivity<ActivityRoomsBinding>() {
         }
     }
 
+    /** 上次画过的头像：AvatarBytes 是按内容比较的，同一张图不会重复解码。 */
+    private var shownAvatar: Avatars.AvatarBytes? = null
+
     override fun onCreateBinding(): ActivityRoomsBinding =
         ActivityRoomsBinding.inflate(layoutInflater)
 
@@ -89,10 +92,7 @@ class RoomsActivity : BaseActivity<ActivityRoomsBinding>() {
         try {
             // 页面不可见时挂起在这里；被取消时走 finally 收掉扫描
             vm.state.collect { state ->
-                if (binding.editNickname.text.toString() != state.nickname) {
-                    binding.editNickname.setText(state.nickname)
-                    binding.editNickname.setSelection(state.nickname.length)
-                }
+                fillNickname(state.nickname)
                 showAvatar(state.avatar)
                 roomsRender(state.rooms.values.toList(), state.roomFoundNote)
             }
@@ -166,10 +166,21 @@ class RoomsActivity : BaseActivity<ActivityRoomsBinding>() {
 
     // ── 头像 ────────────────────────────────────────────────────────────────
 
+    /** 头像只在真的换过时解码/重画（每次状态变化都解一张 512px 的图没必要）。 */
     private fun showAvatar(avatar: Avatars.AvatarBytes?) {
-        if (avatar == null) return
-        val bitmap = Avatars.decode(avatar)
+        if (avatar == shownAvatar) return
+        shownAvatar = avatar
+        val bitmap = avatar?.let { Avatars.decode(it) }
         binding.imageAvatar.setImageBitmap(bitmap)
         binding.textAvatarHint.isVisible = bitmap == null
+    }
+
+    // ── 昵称 ────────────────────────────────────────────────────────────────
+
+    private fun fillNickname(nickname: String) {
+        if (nickname.isNotEmpty() && binding.editNickname.text.isNullOrBlank()) {
+            binding.editNickname.setText(nickname)
+            binding.editNickname.setSelection(nickname.length)
+        }
     }
 }
