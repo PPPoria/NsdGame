@@ -1,19 +1,20 @@
 package com.poria.netnsd.room
 
+import com.poria.netnsd.link.TcpLink
 import kotlinx.serialization.Serializable
 
 /**
  * 服务端推给客户端的**权威快照**：房间里的一切（谁在、坐哪、选了哪个游戏、怎么玩、聊天记录）。
  *
- * 它就是线上那份 `SNAP|{...}` 的 JSON 本体（`@Serializable`），客户端**只渲染它，不做本地推演**：
+ * 它就是 `lobby` 频道 `snap` 事件里那份 JSON 的本体（`@Serializable`），客户端**只渲染它，不做本地推演**：
  * 点按钮只是发命令，等这份快照回来才动界面。这样"花名册/座次/设置"永远只有一份真相——服务端那份。
  *
  * 加字段的代价：给新字段一个默认值即可，老客户端会被 `ignoreUnknownKeys` 忽略掉；
- * 删/改字段则要动 [RoomProtocol.VERSION]。
+ * 删/改字段则要动 [LobbyProtocol.VERSION]。
  */
 @Serializable
 data class RoomSnapshot(
-    val version: Int = RoomProtocol.VERSION,
+    val version: Int = LobbyProtocol.VERSION,
     val roomName: String,
     /** 房主的 playerId；空串 = 房间里暂时没有房主（房主那条连接断了）。 */
     val hostId: String,
@@ -56,8 +57,8 @@ data class RoomPlayer(
     /**
      * 头像的内容 id（`sha1(图片)` 的十六进制，或者 `builtin:` 开头的打包素材）。
      *
-     * 空串 = 没设头像。**快照里只有 id、没有图片本体**：要显示就按 id 去 [RoomSession.blobFile]
-     * 拿缓存，没有就 [RoomSession.requestBlob] 问房主要。
+     * 空串 = 没设头像。**快照里只有 id、没有图片本体**：要显示就按 id 去
+     * `Session.imageFile` 拿缓存，没有就 `Session.requestAvatar` 问拥有者要。
      */
     val avatar: String = "",
 )
@@ -79,31 +80,6 @@ data class RoomMessage(
 enum class RoomPhase(val id: String) {
     Lobby("Lobby"),
     Playing("Playing"),
-
-    // 玩家阶段的设计哲学：After后缀，就表示这个阶段已经执行完了，不可更改了（例如摸牌数、伤害数等等）；
-    // 那么Before的意义是什么呢？是用来和无后缀的阶段区分——有Before的阶段，允许更改（例如摸牌数、伤害数等等），没有后缀的则不允许，只是普通指定，用来给id检测前缀
-
-    PlayerBegin("PlayerBegin"), // 某个玩家阶段开始
-    JudgeBefore("JudgeBefore"),
-    Judge("Judge"), // 判定阶段
-    JudgeAfter("JudgeAfter"),
-    DrawBefore("DrawBefore"),
-    Draw("Draw"), // 摸牌阶段
-    DrawAfter("DrawAfter"),
-    UseBefore("UseBefore"),
-    Use("Use"), // 出牌阶段
-    UseAfter("UseAfter"),
-    DiscardBefore("DiscardBefore"),
-    Discard("Discard"), // 弃牌阶段
-    DiscardAfter("DiscardAfter"),
-    PlayerEnd("PlayerEnd"), // 某个玩家阶段结束
-
-    DamageBefore("DamageBefore"),
-    Damage("Damage"), // 受伤
-    DamageAfter("DamageAfter"),
-    RecoverBefore("RecoverBefore"),
-    Recover("Recover"), // 恢复
-    RecoverAfter("RecoverAfter"),
 }
 
 /** 本机这条连接的状态。**注意**：它不是房间状态，房间状态全在 [RoomSnapshot] 里。 */
@@ -121,8 +97,8 @@ enum class SessionPhase {
 /**
  * UI 要渲染的东西 = 本机连接状态 + 服务端快照。
  *
- * `myId` 是本机自己生成的（[RoomProtocol.join] 报给服务端），所以客户端不用等服务端
- * "告诉我我是谁"就能知道快照里哪一行是自己。
+ * `myId` 是房主分配给本机的身份（`TcpLink.playerId`，经 `LobbyChannel.onLinked` 送进来），
+ * 所以客户端不用等服务端"在快照里告诉我我是谁"就能知道哪一行是自己。
  */
 data class RoomState(
     /** 是不是本机开的房。只影响文案；能不能改设置由快照里的 [RoomSnapshot.hostId] 决定。 */
@@ -136,7 +112,7 @@ data class RoomState(
      * 本机缓存里**已经完整**的图片 id（下载拼完/自己上传就进来的）。
      *
      * 它只影响"能不能立刻画出来"：快照里的头像 id 如果在这里面，UI 直接取文件解码；
-     * 不在就先把占位画上、发一次 [RoomSession.requestBlob]。
+     * 不在就先把占位画上、发一次 `Session.requestAvatar`（它内部按 id 找拥有者）。
      */
     val availableBlobs: Set<String> = emptySet(),
 ) {
@@ -151,4 +127,19 @@ data class RoomState(
     val iAmReady: Boolean get() = myPlayer?.ready == true
 
     fun hasBlob(id: String): Boolean = id.isNotEmpty() && id in availableBlobs
+}
+
+/**
+ * 把"链路状态 + 本机已经能画的图"合进房间状态：客户端拼装层的最后一步。
+ *
+ * 房间快照由 `lobby` 频道给，链路状态和图片可用性是另外两条流，只有 UI 需要它们叠在一起。
+ * 这条注释就是它该放哪儿的答案：**拼装归 UI 层（VM），不归任何一个频道**。
+ */
+fun RoomState.mergedWith(link: TcpLink.LinkState, blobs: Set<String>): RoomState {
+    val mergedNote = when {
+        phase == SessionPhase.CLOSED -> note ?: link.note
+        phase == SessionPhase.CONNECTING -> link.note
+        else -> note
+    }
+    return copy(note = mergedNote, availableBlobs = blobs)
 }

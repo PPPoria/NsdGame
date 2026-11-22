@@ -46,6 +46,6 @@ dependencies {
     // 手写"键=值 + 转义"的方案已经删掉（见 docs/room-reference.md 第 3 节）。
     implementation(libs.kotlinx.serialization.json)
 
-    // RoomProtocol / Room 不碰 Android，用普通 JUnit 在 JVM 上直接测
+    // Room / LobbyProtocol 不碰 Android，用普通 JUnit 在 JVM 上直接测
     testImplementation(libs.junit)
 }

@@ -15,8 +15,8 @@ import java.io.ByteArrayOutputStream
  * 用 `ImageDecoder` 而不是 `BitmapFactory`：它会按 EXIF 自己转正，竖拍的照片不会躺倒；
  * 解码时先按 2 的幂降采样，几十兆的原图也不会把内存吃满。
  *
- * 产物是一段字节（≤ 512px 的 WebP，一般 20–60KB），直接丢给
- * [com.poria.netnsd.room.RoomSession.uploadAvatar] 或随 Intent 带进房间。
+ * 产物是一段字节（≤ 512px 的 WebP，一般 20–60KB），交给 `Session.host` / `Session.join`
+ * 在进房时顺带报上去（图片本体走 `blob` 频道，快照里只留内容 id）。
  */
 object Avatars {
 

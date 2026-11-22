@@ -1,4 +1,4 @@
-package com.poria.netnsd.room
+package com.poria.netnsd.blob
 
 import java.io.File
 import java.io.FileOutputStream
@@ -8,21 +8,20 @@ import java.security.MessageDigest
 /**
  * 内容寻址的小文件仓库：**id = sha1(内容) 的 40 位小写十六进制**。
  *
- * 房主和客户端共用同一份实现：
- * - 房主用它收上传（[put] 逐块写临时文件，最后一块验 hash 通过才转成正式文件）；
- * - 客户端用它拼下载（同样的 [put]），拼完就能 [open]/[file] 出来解成 Bitmap。
- *
- * 于是"同一张图只存一次、只传一次"是白拿的：id 就是内容，谁有谁没有一眼可查。
+ * 房主和客户端共用同一份实现，`BlobChannel`（谁有谁发）的"谁有"就是它：
+ * - 收分块：[put] 逐块写临时文件，最后一块验 hash 通过才转成正式文件；
+ * - 给分块：[file] 拿到文件，`BlobChannel` 按 [BlobLimits.CHUNK_BYTES] 切着发；
+ * - 自己装进来的：[install]（用户选的头像、打包素材之类，不经网络）。
  *
  * 三条约束：
  * 1. **id 只认 sha1 十六进制**，文件名就是 id——顺手挡掉 `../` 这种路径穿越；
  * 2. 分块必须**按顺序**来（同一条 TCP 连接本来就保序），乱序/超长/总块数超限一律拒绝；
- * 3. 总占用按 LRU 配额淘汰（[quotaBytes]），正在被 [open] 的文件在 Android 上删了也不影响
- *    已打开的流（Linux 语义），所以不用为"正在发"单独留后门。
+ * 3. 总占用按 LRU 配额淘汰（[quotaBytes]），正在被读的文件在 Android 上删了也不影响
+ *    已经打开的流（Linux 语义），所以不用为"正在发"单独留后门。
  */
 class BlobStore(
     private val dir: File,
-    private val quotaBytes: Long = RoomProtocol.MAX_BLOB_STORE_BYTES,
+    private val quotaBytes: Long = BlobLimits.STORE_BYTES,
 ) {
 
     private class Upload(val total: Int, val temp: File) {
@@ -62,19 +61,19 @@ class BlobStore(
     fun open(id: String): InputStream? = file(id)?.let { runCatching { it.inputStream() }.getOrNull() }
 
     /**
-     * 收一块（上传、下载都走它）。
+     * 收一块（下载拼装走它）。
      *
      * @return `true` = 这份 blob 已经完整，可以 [file]/[open] 了
-     * @return `false` = 还没收齐，或者这块被拒绝（调用方应把整份上传当作失败）
+     * @return `false` = 还没收齐，或者这块被拒绝（调用方应把整份传输当作失败）
      */
     fun put(id: String, index: Int, total: Int, data: ByteArray): Boolean {
         val clean = id.lowercase()
         if (!isValidId(clean)) return false
-        if (total <= 0 || total > RoomProtocol.MAX_BLOB_CHUNKS) return false
-        if (data.isEmpty() || data.size > RoomProtocol.BLOB_CHUNK_BYTES) return false
+        if (total <= 0 || total > BlobLimits.MAX_CHUNKS) return false
+        if (data.isEmpty() || data.size > BlobLimits.CHUNK_BYTES) return false
 
         synchronized(lock) {
-            // 已经有了：重复上传/对方重连，直接当完成
+            // 已经有了：重复回应/重复下载，直接当完成
             if (blobs.containsKey(clean)) return true
 
             val upload = uploads[clean] ?: startUpload(clean, total) ?: return false
@@ -103,14 +102,14 @@ class BlobStore(
     }
 
     /**
-     * 本机直接放进一份（客户端上传自己的图时用：头像立刻能画，不用等房主绕回来）。
+     * 本机直接放进一份（自己选的头像、打包素材之类，不经网络）。
      *
      * @return 是否已可用（失败说明 id 不合法或落盘出错）
      */
     fun install(id: String, bytes: ByteArray): Boolean {
         val clean = id.lowercase()
         if (!isValidId(clean) || bytes.isEmpty()) return false
-        if (bytes.size > RoomProtocol.MAX_BLOB_BYTES) return false
+        if (bytes.size > BlobLimits.MAX_BYTES) return false
 
         synchronized(lock) {
             if (blobs.containsKey(clean)) return true

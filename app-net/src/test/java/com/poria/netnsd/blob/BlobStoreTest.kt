@@ -1,4 +1,4 @@
-package com.poria.netnsd.room
+package com.poria.netnsd.blob
 
 import java.nio.file.Files
 import org.junit.After
@@ -26,7 +26,7 @@ class BlobStoreTest {
     }
 
     private fun chunksOf(bytes: ByteArray): List<ByteArray> {
-        val size = RoomProtocol.BLOB_CHUNK_BYTES
+        val size = BlobLimits.CHUNK_BYTES
         val count = (bytes.size + size - 1) / size
         return (0 until count).map { index ->
             bytes.copyOfRange(index * size, minOf((index + 1) * size, bytes.size))
@@ -72,14 +72,14 @@ class BlobStoreTest {
         assertTrue("顺序对上了", store.put(id, 1, 2, second))
         assertArrayEquals(first + second, store.file(id)!!.readBytes())
 
-        val another = BlobStore.sha1Hex(ByteArray(RoomProtocol.BLOB_CHUNK_BYTES + 1) { 7 })
+        val another = BlobStore.sha1Hex(ByteArray(BlobLimits.CHUNK_BYTES + 1) { 7 })
         assertFalse(
-            "一块不能超过 BLOB_CHUNK_BYTES",
-            store.put(another, 0, 1, ByteArray(RoomProtocol.BLOB_CHUNK_BYTES + 1) { 7 }),
+            "一块不能超过 CHUNK_BYTES",
+            store.put(another, 0, 1, ByteArray(BlobLimits.CHUNK_BYTES + 1) { 7 }),
         )
         assertFalse(
             "总块数不能超过上限",
-            store.put(another, 0, RoomProtocol.MAX_BLOB_CHUNKS + 1, ByteArray(10)),
+            store.put(another, 0, BlobLimits.MAX_CHUNKS + 1, ByteArray(10)),
         )
     }
 
@@ -95,7 +95,7 @@ class BlobStoreTest {
     }
 
     @Test
-    fun `重复上传同一份直接算完成`() {
+    fun `重复放进同一份直接算完成`() {
         val bytes = ByteArray(100) { 3 }
         val id = BlobStore.sha1Hex(bytes)
         assertTrue(store.install(id, bytes))
@@ -135,8 +135,8 @@ class BlobStoreTest {
     }
 
     @Test
-    fun `同一张图两条流交错就会乱序——所以会话层必须按 id 去重`() {
-        val bytes = ByteArray(RoomProtocol.BLOB_CHUNK_BYTES * 2) { (it % 97).toByte() }
+    fun `同一张图两条流交错就会乱序——所以发送方必须按 (人, id) 去重`() {
+        val bytes = ByteArray(BlobLimits.CHUNK_BYTES * 2) { (it % 97).toByte() }
         val id = BlobStore.sha1Hex(bytes)
         val chunks = chunksOf(bytes)
         assertTrue("这个用例需要两块", chunks.size == 2)
@@ -147,7 +147,7 @@ class BlobStoreTest {
         assertFalse("这块也没用了", store.put(id, 1, 2, chunks[1]))
         assertFalse(store.contains(id))
 
-        // 重新按顺序来一次就成功——会话层的 (peer, id) 去重就是在保证这件事
+        // 重新按顺序来一次就成功——BlobChannel 的 (收件人, id) 去重就是在保证这件事
         assertFalse(store.put(id, 0, 2, chunks[0]))
         assertTrue(store.put(id, 1, 2, chunks[1]))
         assertArrayEquals(bytes, store.file(id)!!.readBytes())

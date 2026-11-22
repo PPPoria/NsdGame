@@ -10,6 +10,7 @@
     <string name="rooms_searching">正在搜索房间…</string>
     <string name="rooms_empty">还没发现房间\n在另一台设备点「创建房间」，或者先自己开一间</string>
     <string name="rooms_status">正在搜索同一个 WiFi 下的房间…（找到 %1$d 个）</string>
+    <string name="rooms_connecting">正在连接…</string>
     <string name="rooms_game_wip">%1$s（开发中）</string>
     <string name="rooms_pick_avatar">选择头像</string>
     <string name="rooms_avatar_hint">头像</string>
@@ -27,6 +28,7 @@
     <string name="room_status_online">房间由房主同步，改动立刻推给所有人</string>
     <string name="room_status_hostless">房主已经离开，设置锁上了</string>
     <string name="room_status_closed">已断开</string>
+    <string name="room_no_session">房间已经不在了，回首页重新进一次</string>
     <string name="room_message_hint">说点什么…</string>
     <string name="room_send">发送</string>
     <string name="room_settings">房间设置</string>

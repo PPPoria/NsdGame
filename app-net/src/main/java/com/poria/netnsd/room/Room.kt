@@ -2,21 +2,20 @@ package com.poria.netnsd.room
 
 import com.poria.core.game.GameCatalog
 import com.poria.core.game.GameInfo
+import com.poria.netnsd.blob.BlobStore
 
 /**
  * 房主侧的房间规则：座位、座次、玩法开关、准备状态、能不能开局。
  *
- * **它是权威**。客户端只发命令，这里改完状态就把**整份快照**广播给所有人（含发起者），
- * 客户端不做任何本地推演/回显——所以"谁在房间里""谁坐几号位"永远只有这一份。
+ * **它是权威，但它不说话**：所有方法只改自己的状态，返回"没生效的原因"（`null` = 生效了），
+ * **不碰 socket、不广播**。推快照是 [LobbyChannel] 的事——它拿着 `LinkOut`，每次改完看一眼
+ * [version] 变没变，变了就 `broadcastEach(snapshot())`。
  *
- * **不碰 socket**：每个成员只给 `send` / `close` 两个回调，于是规则能在 JVM 上单测
- * （`RoomTest` 里用几个假的发送器就把座位/权限/踢人测干净）。
+ * 这样房间规则能在 JVM 上单测（`RoomTest` 只对着 `snapshot()` 断言），
+ * 而"谁该收到"这种联网问题完全不在这一层。
  *
- * 权限也在这一层：`#hostOnly` 判定"发命令的人是不是房主"，不看客户端自称什么。
- * UI 把按钮灰掉只是顺手，真正说了算的是这里。
- *
- * ⚠️ 所有命令都在锁内直接调 `send`：某个客户端写阻塞会拖慢整个房间（局域网回合制的量级
- * 可以接受，和 `Peer.send` 的阻塞写是同一个取舍）。别在 `send` 里做重活。
+ * **客户端不存状态**：客户端那边是同一个 [LobbyChannel] 的客户端半边拿着最近一份快照，
+ * 没有第二份花名册。
  */
 class Room(roomName: String) {
 
@@ -29,7 +28,7 @@ class Room(roomName: String) {
         /** 昵称被别人占了。 */
         data object DuplicateName : JoinResult
 
-        /** 这个 playerId 已经在房间里了（同一条连接发了两次 JOIN）。 */
+        /** 这个 playerId 已经在房间里了（同一条连接发了两次 Join）。 */
         data object AlreadyJoined : JoinResult
 
         data object InvalidName : JoinResult
@@ -41,8 +40,6 @@ class Room(roomName: String) {
         val id: String,
         val name: String,
         val host: Boolean,
-        val send: (String) -> Boolean,
-        val close: () -> Unit,
         var seat: Int,
         var ready: Boolean = false,
         /** 头像的内容 id；空串 = 没设。**房间只存 id，图片本体在 BlobStore 里。** */
@@ -63,7 +60,17 @@ class Room(roomName: String) {
         putAll(GameCatalog.defaultOptions(game))
     }
 
-    /** 当前房间状态（测试和调试用；线上客户端拿到的是广播出去的那份）。 */
+    /**
+     * 状态版本号：每次真的改了东西就 +1。
+     *
+     * Handler 用"进去之前 / 出来之后"的差来判断要不要广播快照，
+     * 于是 Room 的方法不需要区分"成功"和"成功但没变化"（空消息、同一个座位之类）。
+     */
+    @Volatile
+    var version: Int = 0
+        private set
+
+    /** 当前房间状态（客户端拿到的就是它序列化后的样子）。 */
     fun snapshot(): RoomSnapshot = synchronized(lock) { snapshotLocked() }
 
     val size: Int get() = synchronized(lock) { members.size }
@@ -76,18 +83,12 @@ class Room(roomName: String) {
     // ── 进出房间 ────────────────────────────────────────────────────────────
 
     /**
-     * 进房。成功后立刻广播一份新快照（所有人，含新人）。
+     * 进房。座位取最小的空位；失败时**什么都没改**。
      *
-     * @param host 这条连接是不是房主自己（会话层按"是不是 127.0.0.1 回环"填）。
+     * @param host 是不是房主自己——链路认出来的（回环连上来那条），不是客户端自称的
      */
-    fun join(
-        playerId: String,
-        name: String,
-        host: Boolean,
-        send: (String) -> Boolean,
-        close: () -> Unit,
-    ): JoinResult {
-        val id = playerId.trim().take(RoomProtocol.MAX_ID)
+    fun join(playerId: String, name: String, host: Boolean): JoinResult {
+        val id = playerId.trim().take(LobbyProtocol.MAX_ID)
         if (id.isEmpty()) return JoinResult.InvalidId
         val cleanName = sanitizeName(name)
         if (cleanName.isEmpty()) return JoinResult.InvalidName
@@ -98,26 +99,29 @@ class Room(roomName: String) {
             if (members.values.any { it.name == cleanName }) return JoinResult.DuplicateName
 
             val seat = (0 until tableSize).first { index -> members.values.none { it.seat == index } }
-            members[id] = Member(id, cleanName, host, send, close, seat)
-            broadcastLocked()
+            members[id] = Member(id, cleanName, host, seat)
+            bumpLocked()
             return JoinResult.Joined
         }
     }
 
-    /** 离开房间。不认识的人直接忽略（比如被踢之后连接才断开）。 */
-    fun leave(playerId: String) {
-        synchronized(lock) {
-            if (members.remove(playerId) == null) return
-            broadcastLocked()
-        }
+    /**
+     * 离开房间。不认识的人直接忽略（被踢之后连接才断开就是这种情况）。
+     *
+     * @return 房间里真的少了一个人
+     */
+    fun leave(playerId: String): Boolean = synchronized(lock) {
+        if (members.remove(playerId) == null) return false
+        bumpLocked()
+        true
     }
 
     // ── 聊天 / 准备 ─────────────────────────────────────────────────────────
 
     /**
-     * 说一句话。空消息静默忽略（不算错误）；其余情况广播新快照。
+     * 说一句话。空消息静默忽略（不算错误、也不改版本）。
      *
-     * @return 没生效时的原因，`null` 表示已经生效
+     * @return 没生效时的原因，`null` = 已经生效（或者本来就没什么可做的）
      */
     fun say(playerId: String, text: String): String? {
         val clean = sanitizeText(text)
@@ -127,7 +131,7 @@ class Room(roomName: String) {
 
             messages.addLast(RoomMessage(nextSeq++, playerId, clean))
             while (messages.size > MAX_HISTORY) messages.removeFirst()
-            broadcastLocked()
+            bumpLocked()
             return null
         }
     }
@@ -139,7 +143,7 @@ class Room(roomName: String) {
             if (member.ready == ready) return null
 
             member.ready = ready
-            broadcastLocked()
+            bumpLocked()
             return null
         }
     }
@@ -147,13 +151,13 @@ class Room(roomName: String) {
     // ── 头像 ────────────────────────────────────────────────────────────────
 
     /**
-     * 换头像。**没有对应的客户端命令**：图片传完后由 [RoomSession] 调它，
-     * 因为"这个 id 的图真的已经收全了"只有会话层（拿着 [BlobStore] 的那层）知道。
+     * 换头像。图片本体不在房间这里：客户端先把图装进自己的 `BlobStore`，
+     * 再把内容 id 报上来；别人要看就按 id 去拥有者那儿拉。
      *
      * @param avatarId 内容 id（sha1）或 `builtin:` 素材 id；空串表示清掉头像
      */
     fun setAvatar(playerId: String, avatarId: String): String? {
-        val clean = avatarId.trim().take(RoomProtocol.MAX_BLOB_ID)
+        val clean = avatarId.trim().take(LobbyProtocol.MAX_AVATAR)
         if (clean.isNotEmpty() && !BlobStore.isBuiltin(clean) && !BlobStore.isValidId(clean)) {
             return "头像的内容 id 不合法"
         }
@@ -163,7 +167,7 @@ class Room(roomName: String) {
             if (member.avatar == clean) return null
 
             member.avatar = clean
-            broadcastLocked()
+            bumpLocked()
             return null
         }
     }
@@ -180,7 +184,7 @@ class Room(roomName: String) {
             if (members.values.any { it.seat == seat }) return "那个座位有人了"
 
             member.seat = seat
-            broadcastLocked()
+            bumpLocked()
             return null
         }
     }
@@ -199,7 +203,7 @@ class Room(roomName: String) {
 
             first?.seat = b
             second?.seat = a
-            broadcastLocked()
+            bumpLocked()
             return null
         }
     }
@@ -218,7 +222,7 @@ class Room(roomName: String) {
             tableSize = size
             reseatLocked()
             clearReadyLocked()
-            broadcastLocked()
+            bumpLocked()
             return null
         }
     }
@@ -239,7 +243,7 @@ class Room(roomName: String) {
             options.putAll(GameCatalog.defaultOptions(picked))
             reseatLocked()
             clearReadyLocked()
-            broadcastLocked()
+            bumpLocked()
             return null
         }
     }
@@ -253,34 +257,30 @@ class Room(roomName: String) {
 
             options[optionId] = on
             clearReadyLocked()
-            broadcastLocked()
+            bumpLocked()
             return null
         }
     }
 
     // ── 踢人 / 开局 ─────────────────────────────────────────────────────────
 
+    /** 房主：把人移出房间。断开那条连接是 Handler 的事（它会发一条 BYE 再关 socket）。 */
     fun kick(playerId: String, targetId: String): String? {
-        var close: (() -> Unit)? = null
         synchronized(lock) {
             hostOnly(playerId)?.let { return it }
             if (targetId == playerId) return "不能把自己请出去"
-            val target = members.remove(targetId) ?: return "这个人已经不在房间里了"
+            if (members.remove(targetId) == null) return "这个人已经不在房间里了"
 
-            target.send(RoomProtocol.bye("房主把你请出了房间"))
-            close = target.close
-            broadcastLocked()
+            bumpLocked()
+            return null
         }
-        // 关连接放在锁外：close() 会唤醒那条连接的读线程，让它回来调 leave()
-        close?.invoke()
-        return null
     }
 
     /**
      * 房主：开始游戏。校验顺序是"人数够 → 所有人都准备好"，都过了以后才轮到规则本身。
      *
      * 现在规则还没写（`GameInfo.available == false`），所以最后一步返回的是一句提示——
-     * **这里就是将来接对局的地方**：把 return 换成 `phase = RoomPhase.Playing` + 广播即可。
+     * **这里就是将来接对局的地方**：把 return 换成 `phase = RoomPhase.Playing` + `bumpLocked()` 即可。
      */
     fun start(playerId: String): String? {
         synchronized(lock) {
@@ -296,6 +296,10 @@ class Room(roomName: String) {
 
     // ── 内部 ────────────────────────────────────────────────────────────────
 
+    private fun bumpLocked() {
+        version++
+    }
+
     private fun hostOnly(playerId: String): String? {
         val host = members.values.firstOrNull { it.host } ?: return "房主不在，改不了设置"
         return if (host.id == playerId) null else "只有房主能改设置"
@@ -304,8 +308,7 @@ class Room(roomName: String) {
     /**
      * "现在还开不了局"的原因，空串表示可以开始。
      *
-     * 它进快照，所以**只有这一份规则**：客户端拿它显示在按钮上，不自己再判一遍；
-     * 房主真按了「开始」也是走 [start]，两处用的是同一个函数。
+     * 它进快照，所以**只有这一份规则**：客户端拿它显示在按钮上，不自己再判一遍。
      */
     private fun startHintLocked(): String {
         if (phase != RoomPhase.Lobby) return "已经开始了"
@@ -338,11 +341,6 @@ class Room(roomName: String) {
         }
     }
 
-    private fun broadcastLocked() {
-        val line = RoomProtocol.snapshot(snapshotLocked())
-        members.values.forEach { it.send(line) }
-    }
-
     private fun snapshotLocked(): RoomSnapshot = RoomSnapshot(
         roomName = roomName,
         hostId = members.values.firstOrNull { it.host }?.id.orEmpty(),
@@ -357,17 +355,17 @@ class Room(roomName: String) {
         messages = messages.toList(),
     )
 
-    private fun sanitizeName(value: String): String = sanitize(value, RoomProtocol.MAX_NAME)
+    private fun sanitizeName(value: String): String = sanitize(value, LobbyProtocol.MAX_NAME)
 
-    private fun sanitizeText(value: String): String = sanitize(value, RoomProtocol.MAX_TEXT)
+    private fun sanitizeText(value: String): String = sanitize(value, LobbyProtocol.MAX_TEXT)
 
-    private fun sanitizeRoom(value: String): String = sanitize(value, RoomProtocol.MAX_ROOM)
+    private fun sanitizeRoom(value: String): String = sanitize(value, LobbyProtocol.MAX_ROOM)
 
     private fun sanitize(value: String, max: Int): String =
         value.replace('\r', ' ').replace('\n', ' ').trim().take(max)
 
     companion object {
-        /** 聊天记录最多留这么多条（快照太大时还会再丢最老的）。 */
+        /** 聊天记录最多留这么多条（快照太大时 [LobbyProtocol.encodeSnapshot] 还会再丢最老的）。 */
         const val MAX_HISTORY = 40
     }
 }

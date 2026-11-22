@@ -25,18 +25,26 @@ core/                     纯 Kotlin 内核，零 Android 依赖
     net/WireTest.kt       行协议单测
     net/TcpTest.kt        127.0.0.1 上真开 socket 的收发/断开/坏包/房主回环测试
 
-app-net/                  局域网层：发现（NSD）+ 房间（快照协议 / 房间规则 / 会话）
+app-net/                  局域网层：发现（NSD）+ 链路（路由）+ 房间（快照协议 / 规则 / 会话）
   src/main/java/com/poria/netnsd/
     Nsd.kt                服务类型串 + FoundHost
     ServiceAdvertiser.kt  广播"我开了房间"+ TCP 端口
     ServiceDiscovery.kt   搜"谁开了房间" → FoundHost(ip, port)（resolve 单飞队列）
-    room/RoomProtocol.kt  ★ 房间协议：命令 / 整份快照 / ERROR / BYE / 图片分块，负载是 JSON（@Serializable）
-    room/Room.kt          ★ 房主侧规则：座位/座次/玩法/准备/踢人/开局（不碰 socket，可直接测）
-    room/RoomSession.kt   ★ 把三者缝起来：StateFlow<RoomState> + 一串"发命令"的方法
+    link/Frame.kt         ★ 链路帧：FRAME|{v,ns,to,from,p} + `_link` 小协议（hello/welcome/ping/pong/bye）
+    link/TcpHandler.kt    ★ 频道契约：PlayerRef / TcpHandler / LinkOut（发件箱）
+    link/TcpLink.kt       ★ 链路：socket、peer 身份、按 ns 路由、心跳、中转、关闭（不碰 NSD，可 JVM 测）
+    blob/BlobChannel.kt   ★ 图片频道（ns=blob）：谁有谁发、3KB 分块、进度/完成/失败
+    blob/BlobCommands.kt  图片的通用用法（`Session.imageFile/requestImage/images/imageProgress`）
+    blob/BlobStore.kt     ★ 图片仓库：内容寻址（sha1）、分块拼装、hash 校验、LRU 配额
+    blob/BlobFrames.kt    blob 频道的负载（want/chunk/missing/failed）+ 分块读文件
+    blob/BlobLimits.kt    chunk 大小 / 单图上限 / 缓存配额（共用一份）
+    room/Room.kt          ★ 房主侧规则：座位/座次/玩法/准备/踢人/开局（纯状态机，不碰 socket）
+    room/LobbyProtocol.kt ★ `lobby` 频道负载：命令 / 事件 / 快照编码（超预算时丢最老的聊天）
+    room/LobbyChannel.kt  ★ `lobby` 频道：服务端半边（改规则推快照）+ 客户端半边（快照→RoomState）
+    room/RoomCommands.kt  房间动作（`Session.say/setReady/…` + 头像请求）：全是扩展函数，不长胖会话
     room/RoomState.kt     UI 要渲染的东西：本机连接状态 + 服务端快照（RoomSnapshot）
-    room/BlobStore.kt     ★ 图片仓库：内容寻址（sha1）、分块拼装、hash 校验、LRU 配额
-    room/BlobSender.kt    ★ 把一份图分块发给一个 peer（3KB 一块，不卡房间）
-  src/test/java/com/poria/netnsd/room/   协议往返 + 快照裁剪 + 房间规则单测（JVM 直接跑）
+  Session.kt              ★ 进程级连接持有者：唯一的那条 `TcpLink` + `BlobChannel` + `LobbyChannel` + NSD 广播
+  src/test/java/com/poria/netnsd/   帧路由/中转/心跳 + 图片频道 + 大厅频道 + 房间规则（真 socket，JVM 直接跑）
   （详见 app-net/README.md）
 
 base/                     Android 基础设施（可复用的，跟游戏无关）
@@ -46,7 +54,8 @@ base/                     Android 基础设施（可复用的，跟游戏无关�
 
 app/                      唯一的应用模块：UI + MVI 的 ViewModel
   src/main/java/com/ppporia/nsdgames/
-    ui/rooms/RoomsActivity.kt    首页（纯 View 层）：渲染 + 把动作转给 RoomsVM
+    App.kt                       ★ 进程里唯一的 `session`（连接放这儿，不跟页面走）
+    ui/rooms/RoomsActivity.kt    首页（纯 View 层）：渲染 + 把动作转给 RoomsVM；可见即 `session.leave()`
     ui/rooms/RoomAdapter.kt      房间列表适配器
     ui/room/RoomActivity.kt      游戏准备房间（纯 View 层，房主与客人共用）
     ui/room/SeatAdapter.kt       座位条：座位号 = 出手顺序（有头像就画头像）
@@ -54,10 +63,9 @@ app/                      唯一的应用模块：UI + MVI 的 ViewModel
     ui/room/RoomSettingsSheet.kt 底部弹出的房间设置（选游戏 / 牌桌人数 / 玩法开关）
     ui/room/SeatSheet.kt         点座位弹出的动作面板（入座 / 换座 / 请人离开）
     ui/Avatars.kt                头像处理：居中裁正方形 + 缩到 ≤512px + WebP
-    viewmodel/rooms/RoomsVM.kt   ★ 首页的 MVI ViewModel：昵称防抖落盘、房间列表、头像编码
-    viewmodel/room/RoomVM.kt     ★ 房间的 MVI ViewModel：持有 RoomSession，把快照拍平成 RoomUiState
+    viewmodel/rooms/RoomsVM.kt   ★ 首页的 MVI ViewModel：建连接、昵称防抖落盘、房间列表、头像编码
+    viewmodel/room/RoomVM.kt     ★ 房间的 MVI ViewModel：订阅 lobby/link/blob 三条流，拍平成 RoomUiState
     profile/ProfileStore.kt      昵称/头像的 DataStore 读写
-    utils/SessionExt.kt          Intent ↔ RoomSession（开房/加入的 extras 都在这）
 ```
 
 依赖方向：`:app` → `:base` → `:core`，以及 `:app` → `:app-net` → `:core`。反向依赖编译不过。
@@ -69,14 +77,20 @@ ServiceDiscovery/ServiceAdvertiser  只知道"服务名 + IP + 端口"（Android
         ↓ FoundHost(host, port)
 TcpServer / Tcp.connect             只知道"连上、发一行、收一行"（纯 JVM socket）
         ↓ Peer（房主和客人拿到的是同一个类型）
-RoomProtocol / Room                 只知道"谁是谁、谁坐哪、设置是什么、该发给谁"（纯 Kotlin，不碰 socket）
+TcpLink                             只知道"谁是谁、这一条发给谁、按 ns 交给谁"（Frame/心跳/中转）
+        ↓ Frame(ns, p) 交给对应频道
+Room / LobbyProtocol / LobbyChannel 只知道"谁坐哪、设置是什么、该发给谁"（纯 Kotlin，不碰 socket）
         ↓ RoomSnapshot（整份权威快照）
-RoomSession                         持有连接/快照，发命令（StateFlow<RoomState>）
-        ↓
-RoomVM                              把快照拍平成 RoomUiState（MVI），页面销毁时关会话
+Session（App 级）                    持有当前那一条连接：link + blob + lobby + NSD 广播
+        ↓ 三条流
+RoomVM                              拼装 + 拍平成 RoomUiState（MVI）；**退出页面不收摊**
         ↓
 RoomActivity                        只管画和点：collect → render，点击 → vm.xxx()
 ```
+
+**连接归进程，不归页面**：页面之间不传递链路，谁需要谁从 `App.session.connection` 拿。
+所以"房间 → 对局"换页时 socket、身份、图片缓存都还活着；真正收摊只有一处——
+回到首页（`RoomsActivity.onStart` → `session.leave()`），也就是"首页可见 = 没有连接"。
 
 ## 房主自己也是一个客户端（走回环）
 
@@ -88,21 +102,20 @@ RoomActivity                        只管画和点：collect → render，点�
   TcpServer ──┬── 远端客人（LAN socket）
               └── 房主自己（127.0.0.1 回环，同一个 Tcp.connect）
                     ↓ 都是一条普通 Peer
-  session / UI（和客人走完全同一条 send → 校验 → 广播 路径）
+  TcpLink 上的频道（和客人走完全同一条 命令 → 校验 → 广播 路径）
 ```
 
 ```kotlin
-// 房主（RoomSession 内部就是这么干的）
-val server = TcpServer(0, session).start()
-val me = Tcp.connect("127.0.0.1", server.localPort, hostPlayer)  // 和客人同一个函数
-advertise(server.localPort)
+// 房主（Session.host 内部就是这么干的）
+val port = link.host(0)        // TcpServer + 回环客户端 + 报到，一条龙
+advertise(port)                // 端口交给 NSD 去广播
 
 // 客人
-val host = Tcp.connect(ip, port, guestSession)
+link.join(ip, port)
 ```
 
 "房主特权"（改设置、踢人、开局）是**服务端侧的策略**：`Room` 记住哪个 playerId 是房主
-（回环连上来的那条），收到命令时校验发送方，而不是让房主 UI 绕过连接去改状态。
+（链路认出来的那条回环连接），收到命令时校验发送方，而不是让房主 UI 绕过连接去改状态。
 房主退出 = 服务端消失（房间解散）；权威转移明确不做。
 
 **房主那条连接为什么不走内存管道**：做过，又撤了。省下的是每方向几 KB 内核缓冲和几个
@@ -116,23 +129,31 @@ val host = Tcp.connect(ip, port, guestSession)
 攒错一条就永远两边不一致（排序、重连、丢包都会踩）。现在改成了**快照协议**：
 
 ```
-客户端 → 服务端（只是"请求"，能不能改由 Room 说了算）
-  CMD|<命令的 JSON>     type = join / say / ready / seat / swap / size / game / option / kick / start
+客户端 → 房主（只是"请求"，能不能改由 Room 说了算）
+  Frame(ns="lobby", p={"type":"join","name":"小明"})
+  Frame(ns="lobby", p={"type":"say","text":"开一局？"})
+  Frame(ns="lobby", p={"type":"start"})
 
-服务端 → 客户端
-  SNAP|<整份快照的 JSON>      ERROR|<JSON 字符串>（那条命令没生效）
-  BYE|<JSON 字符串>（这条连接被关掉：满员 / 被踢 / 房间解散）
+房主 → 房间成员
+  Frame(ns="lobby", p={"type":"snap","room":{…}})                       ← 整份快照
+房主 → 某个人
+  Frame(ns="lobby", from="<房主>", p={"type":"rejected","reason":"…"})  ← 那条命令没生效
 ```
+
+消息走 `TcpLink` 的帧（`FRAME|{"v":1,"ns":…,"to":…,"from":…,"p":…}`）：
+`ns` 决定交给哪个频道（`lobby` / `blob` / 以后每个游戏一个），链路不解析 `p`。
 
 三条设计决定，改协议前先想清楚：
 
 1. **客户端没有"我的花名册"**。它只有"最近一次收到的快照"，UI 直接照着画。
    发命令不改本地状态——等服务端把新快照推回来（含发起者自己）才动界面。
-2. **`playerId` 由客户端自己生成**（`UUID` 前 16 位），服务端认可后就是身份。
-   这样客户端不用等服务端"告诉我我是谁"就知道快照里哪一行是自己；
+2. **`playerId` 由房主分配**（连上就发 `_link` 的 `hello`，房主回一条 `welcome` 带着 `p1`/`p2`…）。
+   身份只有这一个来源：客户端不自己编，上层（`Room`、对局频道）拿到的都是链路认可过的 id。
+   `TcpLink.playerId` 一建好链路就有值，各频道通过 `onLinked(localId)` 拿到同一份。
    座位是可变的（房主排座次），身份不可变。
-3. **房主是服务端认的**：`127.0.0.1` 回环连上来的那条连接，`Room` 给它打 `host` 标记。
-   `RoomState.iAmHost` 也只看快照里的 `hostId`——UI 灰按钮只是顺手，校验在服务端。
+3. **房主是链路认的**：房主启动时现场生成一份凭据，只有自己那条 `127.0.0.1` 回环连接把它带回来
+   （凭据不上别人的手），那条连接才是房主。`RoomState.iAmHost` 也只看快照里的 `hostId`——
+   UI 灰按钮只是顺手，校验在服务端。
 
 快照里带的东西：房名、房主 id、阶段、游戏 id、牌桌人数、`startHint`（服务端算好的"现在还开不了局"的原因，
 空串 = 能开）、玩法开关、按座位排序的玩家（id / 座位 / 昵称 / 是否房主 / 是否准备）、聊天记录。
@@ -143,30 +164,32 @@ val host = Tcp.connect(ip, port, guestSession)
 加字段只改数据类（`ignoreUnknownKeys` 保证新旧版本不会互相炸）。快照整行仍有 8KB 上限，
 **超预算时从最老的聊天开始丢**——人和设置一条不少（JSON 比手写格式多几十字节/条，聊天能留的条数会少一点）。
 
-上限（`RoomProtocol`）：昵称 12、内容 300、房名 24、playerId 16、错误 80 字符；快照目标 6KB。
+上限（`LobbyProtocol`）：昵称 12、内容 300、房名 24、错误 80 字符（playerId 由链路分配，`p1`/`p2`…）；快照目标 6KB。
 
 ## 图片（头像 / 自定义砖块纹理）
 
-图片走**同一条连接、分块、点对点**，三条消息就够：
+图片走**常驻频道 `blob`**：谁有谁发，房主只做中转（链路 `TcpLink` 的 `sendTo`）。
 
 ```
-上传（设置自己的头像）   CMD|{"type":"blobPut","id":<sha1>,"index":0,"total":14,"data":"<base64>"}
-下载（要别人的图）       CMD|{"type":"blobRequest","id":<sha1>}
-房主发回来               BLOB|<BlobChunkFrame>        BLOB_ERR|<原因>
+缺图的一方   out.sendTo(ownerId, {"type":"want","id":"<sha1>"})
+拥有者       out.sendTo(请求者, {"type":"chunk","id":…,"index":0,"total":14,"size":41000,"data":"<base64 3KB>"})
+收齐         BlobStore 验 sha1 → progress 里那条消失 → ready 里出现 id
+要不到       {"type":"missing"} / {"type":"failed"} → failed 里出现原因
 ```
 
 - **快照里只有 id**（`sha1(图片)` 的十六进制，或 `builtin:` 开头的打包素材），没有字节：
   50 张图不会乘上房间人数；`builtin:` 的图根本不过网，UI 直接从 APK 资源加载。
-- **一块 3KB**（base64 后 4KB、一行约 4.2KB）：单次阻塞写只有几毫秒，图片传输期间聊天/快照
-  最多排在当前这块后面；**不经过房间锁**（`RoomSession` 把它丢进自己的 IO 协程）。
-- **内容寻址**：id 就是内容，房主同一张图只存一份、同一张图全屋只传一次；客户端按 id 落盘
-  （房主 `filesDir`、客人 `cacheDir`），配额 64MB LRU，重开房间还能命中。
-- **上传完成才提交**：最后一块收到且 sha1 对得上，房主才把 avatarId 写进快照广播——
-  别人看到头像时图一定已经拉得到。上传失败会收到 `BLOB_ERR`，客户端的发送循环自己停。
+- **一块 3KB**（base64 后 4KB、一行约 4.2KB）：单次阻塞写只有几毫秒；发送在频道自己的 IO 协程里，
+  同一 `(收件人, id)` 只允许一条流（交错会打乱块序）。
+- **id 就是内容**：接收方拼完自己验 sha1，所以**谁发都行、房主不可信也传不坏**；房主不用替别人存图。
+  客户端按 id 落盘（`cacheDir`），配额 64MB LRU，重开房间还能命中。
+- **能看进度**：`BlobChannel.progress` 是 `StateFlow<Map<String, BlobProgress>>`，
+  里面有 `received / total` 字节数和 `percent`；收齐进 `ready`、要不到进 `failed`。
 - 客户端发图前请先缩到 **≤512px** 再编码（512px WebP/JPEG 一般 20–60KB ≈ 10–20 块）。
 
-实现：`BlobStore`（内容寻址 + 分块拼装 + hash 校验 + 配额）、`BlobSender`（逐块发给一个 peer）、
-`RoomSession.uploadAvatar/requestBlob/blobFile`。
+实现：`blob/BlobChannel`（频道 + 谁有谁发 + 进度）、`blob/BlobStore`（内容寻址、分块拼装、hash 校验、配额）、
+`blob/BlobLimits`（chunk 大小 / 单图上限 / 缓存配额）。`room/` 里旧的 `BLOB` 帧 + 房主存图
+是迁移前的实现，等房间会话接上 `TcpLink` 就删掉。
 
 ## 座位 / 玩法 / 游戏目录
 
@@ -181,10 +204,15 @@ val host = Tcp.connect(ip, port, guestSession)
 ## 下一步：把对局接进来
 
 `START` 现在会过完"人数够、都准备好了"的校验，然后返回一句
-「花砖物语的对局还在施工」。接游戏的步骤在 `docs/room-reference.md` 第 7 节，
-一句话版：在 `Room.start()` 里把 `return` 换成 `phase = RoomPhase.Playing` + 广播，
-再按 `RoomProtocol` 的同一套"命令 → 规则 → 快照"形状加对局命令（命令和快照都只是
-`@Serializable` 数据类加一个 `@SerialName`）。
+「花砖物语的对局还在施工」。接游戏的步骤在 `docs/room-reference.md` 第 7 节，一句话版：
+
+1. `Room.start()` 把 `return` 换成 `phase = RoomPhase.Playing` + `bumpLocked()`；
+2. 新加一个频道（`AzulChannel`，`ns = "azul"` + `AzulProtocol` 的负载），对局页的 ViewModel
+   `link.register(...)` / `onCleared` 时 `unregister("azul")`；
+3. 对局页从 `App.session.connection` 拿链路（**不是**从房间页传过去），所以换页时
+   socket、身份、图片缓存都还活着，回大厅也就退了对局页而已。
+
+链路、房间、图片都不用动，发命令和推快照还是"命令 → 规则 → 快照"那一套。
 
 ## 跑起来
 
@@ -200,11 +228,16 @@ val host = Tcp.connect(ip, port, guestSession)
 |---|---|
 | 消息怎么切（分隔符、长度上限） | `core/.../net/Wire.kt` |
 | 谁连谁、连接/广播/断开 | `core/.../net/TcpServer.kt`、`Tcp.kt`、`Peer.kt` |
-| 房主自己怎么连自己 | `Tcp.connect("127.0.0.1", server.localPort, hostPlayer)`，没有特殊代码 |
+| 房主自己怎么连自己 | `TcpLink.host(0)` 里 `Tcp.connect("127.0.0.1", port)`，没有特殊代码 |
 | 加游戏 / 改人数范围 / 加玩法开关 | `core/.../game/GameCatalog.kt` |
-| 房间协议（加一条命令 / 快照加字段） | `app-net/.../room/RoomProtocol.kt` |
-| 房间规则（谁能改什么、广播给谁） | `app-net/.../room/Room.kt` |
-| 开房/加入的流程 | `app-net/.../room/RoomSession.kt` |
+| 链路（连接、心跳、谁发给谁、中转） | `app-net/.../link/TcpLink.kt`、`Frame.kt`、`TcpHandler.kt` |
+| 连接什么时候建、什么时候断 | `app-net/.../Session.kt`（`App.session`）+ `RoomsActivity.onStart` 的重置 |
+| 房间协议（加一条命令 / 快照加字段） | `app-net/.../room/LobbyProtocol.kt` |
+| 房间规则（谁能改什么） | `app-net/.../room/Room.kt`（纯状态机，不碰网络） |
+| 房间广播 / 踢人 / 拒收 | `app-net/.../room/LobbyChannel.kt` |
+| 房间页的动作（发命令 / 要头像） | `app-net/.../room/RoomCommands.kt` |
+| 图片分块传输 | `app-net/.../blob/BlobChannel.kt`、`BlobStore.kt`、`BlobFrames.kt` |
+| 页面要用图片（取文件 / 要图 / 进度） | `app-net/.../blob/BlobCommands.kt`（订阅 `App.session` 上的那一个频道，**别新建**） |
 | 房间怎么被局域网发现 | `app-net/.../ServiceAdvertiser.kt`、`ServiceDiscovery.kt` |
 | 首页长什么样 / 列表点了之后干什么 | `app/.../ui/rooms/RoomsActivity.kt`、`viewmodel/rooms/RoomsVM.kt` |
 | 房间页长什么样 / 座位条 / 设置面板 | `app/.../ui/room/RoomActivity.kt`、`SeatAdapter.kt`、`RoomSettingsSheet.kt`、`SeatSheet.kt` |
@@ -233,8 +266,11 @@ val host = Tcp.connect(ip, port, guestSession)
    给弹面板时读一眼。
 7. 新文件先按 200 行估一遍，超了就想想是不是在造框架。
 8. 每个功能一次做完再做下一个，不要预留"以后可能要"的扩展点。
-9. **图片不进快照**：快照里只放 id，字节走 `BLOB` 分块；一块 ≤3KB（base64 后 ~4.2KB），
+9. **图片不进快照**：快照里只放 id，字节走 `blob` 分块；一块 ≤3KB（base64 后 ~4.2KB），
    别把 8KB 行上限当"传输容量"用——分块才是不堵别人的关键。
+10. **连接归进程，不归页面**：`TcpLink` 只允许由 `Session`（`App.session`）持有和创建，
+    页面/VM 一律"用而不持有"；页面自己的频道（比如将来的对局频道）由那个 VM
+    `register` / `unregister`，但**不许关链路**。收摊只有一个入口：回到首页。
 
 审查时只问五句话：这个抽象有第二个实现吗？这个类能一句话说清职责吗？新增依赖了吗？
 规则判定有没有散到 UI / 网络里？客户端是不是又在偷偷存状态？
@@ -247,14 +283,15 @@ val host = Tcp.connect(ip, port, guestSession)
 - **一条链路，一个类型**：远端客人、房主自己（`127.0.0.1` 回环）都是 `Tcp.connect` 拿到的
   `Peer`，`PeerListener` 也是同一个接口——**会话代码里不允许出现"这是房主所以走另一条路"的分支**。
 - `:app-net` 是**唯一能同时碰协程和 Android API** 的联网模块：NSD 发现（resolve 单飞队列用
-  `Channel` + 挂起 `for` 循环），以及房间这一层（协议 / 房间规则 / 会话）。`Room` 刻意
-  不碰 socket（只收成员给的 `send` / `close` 回调），所以房间规则能在 JVM 上单测；
-  `RoomSession` 才把它们缝起来。
-- `:app` **只有 UI + MVI**：`RoomVM` / `RoomsVM` 持有会话和状态，Activity 只做
-  `vm.state.collect { render }` + 把点击转给 VM；不解析协议、不判断谁能改设置（按钮灰不灰跟着快照走）。
-- 线程：`TcpServer.start` / `Tcp.connect` 是**阻塞**的，别在主线程调（`RoomSession` 已放进协程）；
+  `Channel` + 挂起 `for` 循环），以及房间这一层（协议 / 房间规则 / 频道）。`Room` 刻意
+  不碰 socket（只改自己的状态），所以房间规则能在 JVM 上单测；`LobbyChannel` 才把"谁该收到"
+  接上，`Session` 只负责建/关和持有。
+- `:app` **只有 UI + MVI**：`RoomVM` / `RoomsVM` 从 `App.session` 拿连接、拼状态、转发动作，
+  Activity 只做 `vm.state.collect { render }` + 把点击转给 VM；不解析协议、不判断谁能改设置
+  （按钮灰不灰跟着快照走）、不持有链路。
+- 线程：`TcpLink.host` / `TcpLink.join` 是**阻塞**的，别在主线程调（`Session` 已经放进协程）；
   `ServiceAdvertiser` / `ServiceDiscovery` 的方法**必须**在主线程调（NsdManager 要 Looper），
-  `RoomSession.close()` 也是（它要注销广播）。`Peer` 的回调在那条连接的读线程上按序到达，
+  所以 `Session.leave()` 自己切主线程。`Peer` 的回调在那条连接的读线程上按序到达，
   NSD 的回调已经替你抛回主线程，UI 侧收的是 `StateFlow`，所以哪条线程都不用手动切。
 
 ## 当前刻意简化的地方
@@ -262,11 +299,11 @@ val host = Tcp.connect(ip, port, guestSession)
 - 界面：无动画、无音效；聊天记录不落盘（退出房间即清空）；牌桌最多 6 座，花砖物语 2–4 人。
 - 本机资料（昵称、头像）落在 DataStore（`DSManager`）：头像转 base64 存成字符串，昵称输入防抖 500ms 写一次；
   换设备/重装就没了（没有账号体系）。
-- 转屏靠 `android:configChanges` 不重开（房间页尤其重要：重建会 `close()` 掉房间）。
+- 转屏靠 `android:configChanges` 不重开（订阅不重来；连接在 `App.session` 上，本来也不跟页面走）。
 - 联网：只有"行协议 + socket + 房主回环 + NSD 发现 + 房间快照"这几块，
   **断线重连、离线消息、房主权威转移都没写**；房主退出 = 房间解散。
 - 对局规则还没写：`START` 只做校验然后给一句提示（`GameInfo.available = false`）。
-- 进程被杀后再回到房间页，会按 Intent 重新开一个同名房间（历史消息不保留）。
+- 进程被杀后再回到房间页：`App.session` 里没有连接了，页面提示一句就退出（不自动重连）。
 
 ## 版本管理约定
 

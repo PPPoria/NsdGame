@@ -2,6 +2,7 @@ package com.ppporia.nsdgames.ui.room
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
@@ -11,9 +12,9 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import com.poria.base.ext.setOnClickListenerWithClickAnimation
 import com.poria.base.ui.BaseActivity
 import com.poria.netnsd.room.SessionPhase
+import com.ppporia.nsdgames.App
 import com.ppporia.nsdgames.R
 import com.ppporia.nsdgames.databinding.ActivityRoomBinding
-import com.ppporia.nsdgames.utils.openRoomSession
 import com.ppporia.nsdgames.viewmodel.room.RoomUiState
 import com.ppporia.nsdgames.viewmodel.room.RoomVM
 import com.ppporia.nsdgames.viewmodel.room.SeatTag
@@ -26,13 +27,14 @@ import com.ppporia.nsdgames.viewmodel.room.SeatTag
  * - 按钮只调 VM 的方法，不本地改状态——界面要等服务端推回新快照才动；
  * - 这个类只做四件事：拼字符串（i18n）、把头像 id 解成 Bitmap、弹面板、处理键盘内边距。
  *
- * 房主和客人跑的是同一个页面：开房 / 加入的差别只在 Intent，会话由 [openRoomSession] 建好后
- * 交给 [RoomVM]，页面本身完全不知道自己是哪一边。
+ * 房主和客人跑的是同一个页面，**页面本身不建连接**：连接是首页（`RoomsActivity`）建的，
+ * 放在 `App.session` 上。所以这个页面退出（比如进对局页）不会把别人踢下线；
+ * 真收摊是回到首页那一下（首页约定"可见 = 没有连接"）。
  */
 class RoomActivity : BaseActivity<ActivityRoomBinding>() {
 
     private val vm: RoomVM by viewModels {
-        viewModelFactory { initializer { RoomVM(openRoomSession()) } }
+        viewModelFactory { initializer { RoomVM((application as App).session) } }
     }
 
     private val seatAdapter = SeatAdapter { seat -> openSeatSheet(seat) }
@@ -52,6 +54,14 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
         ActivityRoomBinding.inflate(layoutInflater)
 
     override fun initView() {
+        // 连接是首页建的；进程被杀之后直接回到这个页面（返回栈恢复）就没有连接了，
+        // 提示一句再退出，比留一个"永远连不上"的空房间好
+        if ((application as App).session.connection == null) {
+            Toast.makeText(this, R.string.room_no_session, Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
+
         actionsBasePadding = binding.rowActions.paddingBottom
 
         binding.recyclerSeats.layoutManager =
@@ -108,7 +118,8 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
     }
 
     override fun onDestroy() {
-        // 会话在 RoomVM.onCleared() 里关（它也要在主线程，而且转屏重建时不该被关）
+        // 连接不在这里关：它属于进程（`App.session`），进对局页时还得活着。
+        // 真正的收摊在回到首页那一下（`RoomsActivity.onStart` → `session.leave()`）。
         settingsSheet?.dismiss()
         settingsSheet = null
         super.onDestroy()
