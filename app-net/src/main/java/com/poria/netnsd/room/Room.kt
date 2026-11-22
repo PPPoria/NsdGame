@@ -17,7 +17,7 @@ import com.poria.netnsd.blob.BlobStore
  * **客户端不存状态**：客户端那边是同一个 [LobbyChannel] 的客户端半边拿着最近一份快照，
  * 没有第二份花名册。
  */
-class Room(roomName: String) {
+class Room internal constructor(roomName: String) {
 
     sealed interface JoinResult {
         data object Joined : JoinResult

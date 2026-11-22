@@ -6,8 +6,6 @@ import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
-import androidx.lifecycle.viewmodel.initializer
-import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.poria.base.ext.setOnClickListenerWithClickAnimation
 import com.poria.base.ui.BaseActivity
@@ -33,9 +31,7 @@ import com.ppporia.nsdgames.viewmodel.room.SeatTag
  */
 class RoomActivity : BaseActivity<ActivityRoomBinding>() {
 
-    private val vm: RoomVM by viewModels {
-        viewModelFactory { initializer { RoomVM((application as App).session) } }
-    }
+    private val vm by viewModels<RoomVM>()
 
     private val seatAdapter = SeatAdapter { seat -> openSeatSheet(seat) }
     private val messageAdapter = MessageAdapter()
@@ -56,7 +52,7 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
     override fun initView() {
         // 连接是首页建的；进程被杀之后直接回到这个页面（返回栈恢复）就没有连接了，
         // 提示一句再退出，比留一个"永远连不上"的空房间好
-        if ((application as App).session.connection == null) {
+        if (App.session.connection == null) {
             Toast.makeText(this, R.string.room_no_session, Toast.LENGTH_SHORT).show()
             finish()
             return

@@ -137,8 +137,8 @@ guest-2 的 Handler 收到：onEvent(payload, from = "guest-1")
 | `Session`（顶层，不在 `room/`） | **进程级连接持有者**：建/关 `TcpLink`，持有当前那一条 `Connection`（link + blob + lobby）和 NSD 广播 | ❌ 要真机 |
 
 ```kotlin
-// App 里只放一个
-val session = Session(this)          // App.session
+// 进程里唯一的一个（Session 构造器是 private，只能这么拿；`:app` 的 App.session 就是它的包装）
+val session = Session.getInstance(BaseApp.context)
 
 // 房主
 val error = session.host("小明的房间", "小明", avatarBytes)   // suspend，null = 成功
@@ -151,11 +151,26 @@ session.leave()                      // 唯一收摊入口，自己切主线程
 val error = session.join(foundHost, "小红", avatarBytes)
 ```
 
+### 边界是 `internal`，不是文档
+
+`:app` 拿不到"造/关"的能力，越界直接编译失败（不是靠 review 发现）：
+
+| 想偷偷干的事 | 谁挡住 |
+|---|---|
+| `Session(context)` | 构造器 `private`，只能 `getInstance(context)` |
+| `TcpLink(...)` | 构造器 `internal`（`:app-net` 之外不可见） |
+| `link.host/join/close` | `internal`——页面拿得到链路，但开不了、关不掉 |
+| `BlobChannel(...)` / `LobbyChannel(...)` / `BlobStore(...)` / `Room(...)` | 构造器 `internal`——页面**新建不了**频道 |
+| `Connection(...)` | 构造器 `internal`——伪造不了连接 |
+
+`internal` 的边界是**模块**：`:app-net` 内部任何文件都能造（测试也要造），`:app` / `:base` / `:core` 一律看不到。
+页面能做的只有：读 `state` / `playerId`、`register` 自己的频道、发帧、调 `Session` 的公开方法和扩展函数。
+
 **为什么不是"页面持有会话"**：socket 和 NSD 广播比任何一个页面都活得久（房间页进对局页时
-它们必须还在）。所以 `Session` 放在 `App` 上，页面只"用而不持有"：VM 把 `lobby.state` /
-`link.state` / `blob.available` 三条流拼成 UI 状态，Acitivity 只渲染。**换页不传链路**，
-下一个页面的 VM 从 `App.session.connection` 拿；它自己的频道（比如 `azul`）自己
-`register` / `unregister`，但绝不关链路。
+它们必须还在）。所以 `Session` 挂在 `App` 的伴生对象上（`App.session`，全进程一个），页面只"用而不持有"：
+VM 把 `lobby.state` / `link.state` / `blob.available` 三条流拼成 UI 状态，Activity 只渲染。
+**换页不传链路**，下一个页面的 VM 从 `App.session.connection` 拿；它自己的频道（比如 `azul`）
+自己 `register` / `unregister`，但绝不关链路。
 
 ## 协议：帧 + ns，快照是唯一数据通道
 

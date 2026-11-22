@@ -19,7 +19,7 @@ import java.security.MessageDigest
  * 3. 总占用按 LRU 配额淘汰（[quotaBytes]），正在被读的文件在 Android 上删了也不影响
  *    已经打开的流（Linux 语义），所以不用为"正在发"单独留后门。
  */
-class BlobStore(
+class BlobStore internal constructor(
     private val dir: File,
     private val quotaBytes: Long = BlobLimits.STORE_BYTES,
 ) {

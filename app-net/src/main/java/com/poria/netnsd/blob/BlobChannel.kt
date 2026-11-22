@@ -43,7 +43,7 @@ import kotlinx.coroutines.launch
  * **发送**在频道自己的 IO 协程里跑，且同一 `(收件人, id)` 只允许一条流——两条流交错会打乱
  * 块序，`BlobStore` 会整份放弃。
  */
-class BlobChannel(private val store: BlobStore) : TcpHandler {
+class BlobChannel internal constructor(private val store: BlobStore) : TcpHandler {
 
     override val ns: String = NS
 

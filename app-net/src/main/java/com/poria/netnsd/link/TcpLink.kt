@@ -44,6 +44,12 @@ import kotlinx.serialization.json.JsonElement
  * 方向由"从哪条连接收到"决定，帧里没有"命令/推送"字段：
  * 服务端侧收到 → [TcpHandler.onCommand]（带是谁发的）；客户端侧收到 → [TcpHandler.onEvent]。
  *
+ * ## 谁能造、谁能关（编译器管的，不是文档管的）
+ * 构造器、[host]、[join]、[close]、[disconnect] 都是 `internal`：**只有 `:app-net` 里的
+ * `Session` 能造链路、能启动它、能关掉它**。`:app` 的页面/VM 拿得到 `TcpLink` 引用，
+ * 但只能读 [state] / [playerId]、`register` 自己的频道、发帧——没法自己开一条链路，
+ * 也没法把房间关了。
+ *
  * ## 线程
  * - [host] / [join] 是**阻塞**的（建 socket + 等房主分身份），别在主线程调；
  * - Handler 的回调在收到消息那条连接的**读线程**上按序执行，不同连接之间可能并发——
@@ -55,7 +61,7 @@ import kotlinx.serialization.json.JsonElement
  * 每 [beatIntervalMs] 给每条连接发一次 ping；超过 [timeoutMs] 没收到任何帧就断开那条连接
  * （局域网里手机直接消失不会有 FIN，只能靠应用层心跳发现）。房主断开 = 房间解散。
  */
-class TcpLink(
+class TcpLink internal constructor(
     /** 心跳间隔；默认 10 秒。测试里可以调小。 */
     private val beatIntervalMs: Long = DEFAULT_BEAT_INTERVAL_MS,
     /** 多久没收到任何帧就认为对方没了；默认 25 秒。 */
@@ -127,8 +133,7 @@ class TcpLink(
      * **阻塞**。返回时本机已经拿到身份（[playerId] 有值）；返回的端口是给上层做 NSD 广播用的
      * （链路不碰 Android）。
      */
-    fun host(port: Int = 0): Int {
-        check(!closed) { "链路已经关了" }
+    internal fun host(port: Int = 0): Int {        check(!closed) { "链路已经关了" }
         val claim = UUID.randomUUID().toString()
         val started = synchronized(lock) {
             check(server == null) { "已经在当房主了" }
@@ -150,7 +155,7 @@ class TcpLink(
     }
 
     /** 加入房主。**阻塞**；返回时 [playerId] 已经是房主分的身份。 */
-    fun join(host: String, port: Int) {
+    internal fun join(host: String, port: Int) {
         check(!closed) { "链路已经关了" }
         synchronized(lock) {
             check(server == null) { "房主不用 join" }
@@ -172,7 +177,7 @@ class TcpLink(
      *
      * 任意线程调用，重复调用安全。房主关链路 = 房间解散。
      */
-    fun close(reason: String? = null) {
+    internal fun close(reason: String? = null) {
         closeInternal(reason)
     }
 
@@ -227,7 +232,7 @@ class TcpLink(
      *
      * 只有房主侧有意义；对方会从 `_link` 的 BYE 里拿到原因。
      */
-    fun disconnect(playerId: String, reason: String): Boolean {
+    internal fun disconnect(playerId: String, reason: String): Boolean {
         val peer = synchronized(lock) {
             players.entries.firstOrNull { it.value.id == playerId }?.key
         } ?: return false

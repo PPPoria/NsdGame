@@ -20,8 +20,10 @@ import kotlinx.coroutines.withContext
  *
  * 它们同生共死（链路一关，图片和房间频道就没地方发帧了），所以绑在一起；
  * 它**不是**"会话门面"：没有命令方法、不拼状态，页面要做什么都自己拿这几个对象去做。
+ *
+ * 构造器是 `internal` 的：只有 `:app-net` 里的 [Session] 能造出它，页面伪造不了。
  */
-class Connection(
+class Connection internal constructor(
     val link: TcpLink,
     val blob: BlobChannel,
     val lobby: LobbyChannel,
@@ -58,8 +60,20 @@ class Connection(
  * - [leave] 是唯一收摊入口，自己切主线程（NsdManager 要 Looper），重复调用安全；
  * - 首页（`RoomsActivity`）每次可见都会调 [leave]，所以"在首页 = 没有连接"是一条硬约束，
  *   异常退出 / 进程重建的残留都会被它兜住。
+ *
+ * ## 这些约定不是靠 README 守的，是编译器守的
+ *
+ * | 想偷偷干的事 | 谁挡住了它 |
+ * |---|---|
+ * | `Session(context)` | 构造器 `private`——只能 [getInstance] |
+ * | `TcpLink(...)` | `TcpLink` 的构造器是 `internal`（只有 `:app-net` 能造） |
+ * | `link.host/join/close` | 同样是 `internal`——页面拿得到链路，但启动不了、关不掉 |
+ * | `BlobChannel(...)` / `LobbyChannel(...)` / `BlobStore(...)` / `Room(...)` | 构造器 `internal`——页面**新建不了**频道 |
+ *
+ * 也就是说 `:app` 里的代码只能"读状态 + 调本文件/扩展函数的公开方法"；
+ * 要开连接、要收摊，除了 [host] / [join] / [leave] 没别的口子。
  */
-class Session(context: Context) {
+class Session private constructor(context: Context) {
 
     private val appContext: Context = context.applicationContext
 
@@ -172,6 +186,23 @@ class Session(context: Context) {
     private val advertiseListener = object : ServiceAdvertiser.Listener {
         override fun onFailed(reason: String) {
             connection?.lobby?.attention(reason)
+        }
+    }
+
+    companion object {
+
+        @Volatile
+        private var instance: Session? = null
+
+        /**
+         * 进程里唯一的那个会话（`:app` 的 `App.session` 就是它）。
+         *
+         * 为什么是单例而不是让 App 自己 new：**App 在 `:app` 模块，构造器 `private` 后它造不出来**，
+         * 于是"整个进程只有一条链路"这件事由编译器保证，而不是靠文档提醒。
+         * 只保存 `applicationContext`，拿 Activity 来调也不会泄漏。
+         */
+        fun getInstance(context: Context): Session = instance ?: synchronized(this) {
+            instance ?: Session(context.applicationContext).also { instance = it }
         }
     }
 }

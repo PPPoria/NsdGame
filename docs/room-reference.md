@@ -291,6 +291,10 @@ Session    { connection: Connection?, advertiser: ServiceAdvertiser? } ← App �
 - `Session.leave()`：**唯一收摊入口**，自己切主线程注销 NSD 再关链路；重复调用安全。
 - **它不知道房间协议**：`say/setReady/…` 是 `room/RoomCommands.kt` 里的扩展函数，
   状态拼装在 VM，图片进度在 `BlobChannel` 自己身上。以后加对局，`Session` 一行都不用改。
+- **这些边界是编译器管的**：`Session` 构造器 `private`（只能 `getInstance(context)`），
+  `TcpLink` 构造器和 `host/join/close` 是 `internal`，`Connection` / `BlobChannel` /
+  `LobbyChannel` / `BlobStore` / `Room` 的构造器也是 `internal`。`:app` 里写 `TcpLink()`、
+  `link.close()`、`BlobChannel(...)` 都编译不过——README 里那条"别新建"因此只是解释，不是防线。
 - 本机 id：`link.playerId` 是房主分的，`LobbyChannel` 从 `onLinked` 拿到同一份，
   所以 `RoomState.myId` 在进房之前就有值。
 - **为什么它必须比页面活得久**：房主的 `Room`（座位/座次/昵称权威）就活在 `LobbyChannel` 里。

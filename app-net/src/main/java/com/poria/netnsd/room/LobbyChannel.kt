@@ -23,7 +23,7 @@ import kotlinx.serialization.json.JsonElement
  *
  * 本机身份（`RoomState.myId`）由链路分配后从 [onLinked] 送进来，不是自己编的。
  */
-class LobbyChannel(
+class LobbyChannel internal constructor(
     /** 只有房主传房间名；客人传 null（没有服务端半边）。 */
     roomName: String?,
     host: Boolean,

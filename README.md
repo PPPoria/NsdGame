@@ -54,7 +54,7 @@ base/                     Android 基础设施（可复用的，跟游戏无关�
 
 app/                      唯一的应用模块：UI + MVI 的 ViewModel
   src/main/java/com/ppporia/nsdgames/
-    App.kt                       ★ 进程里唯一的 `session`（连接放这儿，不跟页面走）
+    App.kt                       ★ 进程里唯一的 `App.session`（放伴生对象里，调用点不用 cast）
     ui/rooms/RoomsActivity.kt    首页（纯 View 层）：渲染 + 把动作转给 RoomsVM；可见即 `session.leave()`
     ui/rooms/RoomAdapter.kt      房间列表适配器
     ui/room/RoomActivity.kt      游戏准备房间（纯 View 层，房主与客人共用）
@@ -268,9 +268,11 @@ link.join(ip, port)
 8. 每个功能一次做完再做下一个，不要预留"以后可能要"的扩展点。
 9. **图片不进快照**：快照里只放 id，字节走 `blob` 分块；一块 ≤3KB（base64 后 ~4.2KB），
    别把 8KB 行上限当"传输容量"用——分块才是不堵别人的关键。
-10. **连接归进程，不归页面**：`TcpLink` 只允许由 `Session`（`App.session`）持有和创建，
+10. **连接归进程，不归页面**：`TcpLink` 只由 `Session`（`App.session`，进程单例）创建和关闭，
     页面/VM 一律"用而不持有"；页面自己的频道（比如将来的对局频道）由那个 VM
     `register` / `unregister`，但**不许关链路**。收摊只有一个入口：回到首页。
+    这一条**不靠自觉**：`Session` 的构造器是 `private`、`TcpLink` 的构造器和
+    `host/join/close` 都是 `internal`，`:app` 里写 `TcpLink()` 或 `link.close()` 直接编译不过。
 
 审查时只问五句话：这个抽象有第二个实现吗？这个类能一句话说清职责吗？新增依赖了吗？
 规则判定有没有散到 UI / 网络里？客户端是不是又在偷偷存状态？

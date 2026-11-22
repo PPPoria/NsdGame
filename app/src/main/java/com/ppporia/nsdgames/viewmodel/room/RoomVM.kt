@@ -3,7 +3,6 @@ package com.ppporia.nsdgames.viewmodel.room
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.poria.core.game.GameCatalog
-import com.poria.netnsd.Session
 import com.poria.netnsd.blob.imageFile
 import com.poria.netnsd.blob.requestImage
 import com.poria.netnsd.room.RoomSnapshot
@@ -19,6 +18,7 @@ import com.poria.netnsd.room.setTableSize
 import com.poria.netnsd.room.start
 import com.poria.netnsd.room.swapSeats
 import com.poria.netnsd.room.takeSeat
+import com.ppporia.nsdgames.App
 import com.ppporia.nsdgames.ui.room.RoomMessageItem
 import com.ppporia.nsdgames.ui.room.messagesOf
 import java.io.File
@@ -39,11 +39,14 @@ import kotlinx.coroutines.launch
  *   三个频道谁都不用认识对方；
  * - 动作只是一行转发（`room/RoomCommands.kt` 里的扩展函数），不返回结果——
  *   成功与否由服务端推回的新快照说了算；
- * - 快照里谁有头像而本机还没有，在 [init] 里统一按 id 去要（`Session.requestAvatar` 自带去重）。
+ * - 快照里谁有头像而本机还没有，在 [init] 里统一按 id 去要（`requestImage` 自带去重）。
  *
  * **客户端不存房间数据**：花名册 / 座位 / 设置 / 消息全部来自 `lobby.state.snapshot`。
  */
-class RoomVM(private val session: Session) : ViewModel() {
+class RoomVM : ViewModel() {
+
+    /** 进程里唯一的会话（`App` 的伴生对象）；这里只是引用，不负责它的生死。 */
+    private val session = App.session
 
     private val connection = session.connection
 

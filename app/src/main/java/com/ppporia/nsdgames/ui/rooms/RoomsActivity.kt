@@ -8,8 +8,6 @@ import androidx.activity.viewModels
 import androidx.core.view.isVisible
 import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.viewmodel.initializer
-import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.poria.base.ext.setOnClickListenerWithClickAnimation
 import com.poria.base.ui.BaseActivity
@@ -44,9 +42,7 @@ import kotlinx.coroutines.launch
  */
 class RoomsActivity : BaseActivity<ActivityRoomsBinding>() {
 
-    private val vm: RoomsVM by viewModels {
-        viewModelFactory { initializer { RoomsVM((application as App).session) } }
-    }
+    private val vm by viewModels<RoomsVM>()
 
     private val adapter = RoomAdapter { join(it) }
     private var discovery: ServiceDiscovery? = null
@@ -116,7 +112,7 @@ class RoomsActivity : BaseActivity<ActivityRoomsBinding>() {
         super.onStart()
         // 硬约束：**首页可见 = 没有连接**。进房间前是干净的，回到首页（不管是主动退出、
         // 被踢、还是房间解散）也一定是干净的——异常退出的残留同样会被这里收掉。
-        lifecycleScope.launch { (application as App).session.leave() }
+        lifecycleScope.launch { App.session.leave() }
     }
 
     override fun onDestroy() {

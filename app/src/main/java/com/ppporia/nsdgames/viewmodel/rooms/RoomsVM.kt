@@ -6,7 +6,7 @@ import android.text.Editable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.poria.netnsd.FoundHost
-import com.poria.netnsd.Session
+import com.ppporia.nsdgames.App
 import com.ppporia.nsdgames.profile.ProfileStore
 import com.ppporia.nsdgames.ui.Avatars
 import kotlinx.coroutines.CancellationException
@@ -36,7 +36,10 @@ private const val NICKNAME_SAVE_DEBOUNCE_MS = 500L
  * 于是"连不上"的失败信息留在首页显示（[RoomsState.roomFoundNote]），不用带进下一个页面。
  */
 @OptIn(FlowPreview::class)
-class RoomsVM(private val session: Session) : ViewModel() {
+class RoomsVM : ViewModel() {
+
+    /** 进程里唯一的会话（`App` 的伴生对象）；这里只是引用，不负责它的生死。 */
+    private val session = App.session
     private val pendingNickname = MutableStateFlow<String?>(null)
     private val roomsFlow = MutableStateFlow(LinkedHashMap<String, FoundHost>())
     private val roomFoundNoteFlow = MutableStateFlow<String?>(null)
