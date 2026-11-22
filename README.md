@@ -8,6 +8,10 @@
 
 > 想接着做／想改房间？先读 **`docs/room-reference.md`**：文件地图、快照协议、
 > 线程约定、接一个游戏的步骤、真机验证过的范围，都在那一份里。
+>
+> 想给新页面加一套联网能力（对局页、观战页…）？读 **`docs/handler-channel-guide.md`**
+> 《为你的 Activity 设计 Handler / Channel》：协议怎么切、`TcpHandler` 的每个回调、
+> payload 怎么收发、图片怎么推拉。
 
 ```
 core/                     纯 Kotlin 内核，零 Android 依赖
@@ -129,16 +133,20 @@ link.join(ip, port)
 攒错一条就永远两边不一致（排序、重连、丢包都会踩）。现在改成了**快照协议**：
 
 ```
-客户端 → 房主（只是"请求"，能不能改由 Room 说了算）
+客户端 → 服务器（只是"请求"，能不能改由 Room 说了算）
   Frame(ns="lobby", p={"type":"join","name":"小明"})
   Frame(ns="lobby", p={"type":"say","text":"开一局？"})
   Frame(ns="lobby", p={"type":"start"})
 
-房主 → 房间成员
+服务器 → 房间成员
   Frame(ns="lobby", p={"type":"snap","room":{…}})                       ← 整份快照
-房主 → 某个人
-  Frame(ns="lobby", from="<房主>", p={"type":"rejected","reason":"…"})  ← 那条命令没生效
+服务器 → 某个人
+  Frame(ns="lobby", from="<服务器>", p={"type":"rejected","reason":"…"}) ← 那条命令没生效
 ```
+
+> 措辞：**服务器**是跑规则、推快照的那个进程；**房主**是"服务器所在机器上的那个玩家"，
+> 他自己也走同一条客户端路径（回环）。命令永远发给服务器，事件永远由服务器发出——
+> 两者的区别见 `docs/handler-channel-guide.md` 第 0 节。
 
 消息走 `TcpLink` 的帧（`FRAME|{"v":1,"ns":…,"to":…,"from":…,"p":…}`）：
 `ns` 决定交给哪个频道（`lobby` / `blob` / 以后每个游戏一个），链路不解析 `p`。

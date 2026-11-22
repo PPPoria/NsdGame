@@ -62,6 +62,7 @@ guest-2 的 Handler 收到：onEvent(payload, from = "guest-1")
 | `azul`… | 各游戏的对局状态 | 权威数据，走房主 |
 
 这样 `TcpLink` 不需要认识任何一个业务：加频道 = 加一个 `TcpHandler`，链路一行不改。
+（想自己加一个频道？照着 **`../docs/handler-channel-guide.md`** 抄，那份是完整步骤。）
 
 | 类 | 干什么 | 测得了吗 |
 |---|---|---|

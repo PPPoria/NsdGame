@@ -124,11 +124,16 @@ FRAME|{"v":1,"ns":"lobby","p":{"type":"say","text":"开一局？"}}
 
 ### 3.2 `lobby` 频道：命令与事件
 
+> 术语：**服务器** = 跑规则、推快照的那个进程（`link.host()` 起的那个 `TcpLink`）；
+> **房主** = 一个玩家，今天他手机上同时跑着服务器，所以他是"服务器的第一个客户端"；
+> **客户端** = 其他玩家。命令永远发给服务器，事件永远由服务器发出。（详见
+> `docs/handler-channel-guide.md` 第 0 节。）
+
 ```
-客户端 → 房主   LobbyProtocol.Command
+客户端 → 服务器   LobbyProtocol.Command
   join / say / ready / seat / swap / size / game / option / kick / avatar / start
 
-房主 → 客户端   LobbyProtocol.Event
+服务器 → 客户端   LobbyProtocol.Event
   {"type":"snap","room":{…}}        唯一的数据通道：每次变化整份推给**房间成员**（含发起者）
   {"type":"rejected","reason":"…"}  那条命令没生效（状态没动），给人看的原因
 ```
