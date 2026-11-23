@@ -114,7 +114,9 @@ guest-2 的 Handler 收到：onEvent(payload, from = "guest-1")
 
 ```
 :app  ──┬─→ :base ──→ :core
-        └─→ :app-net ──→ :core
+        ├─→ :app-net ──┬─→ :core
+        │              └─→ :game-core      ← 大厅校验人数/玩法用
+        └─→ :game-core（纯叶子：谁的依赖都不加）
 ```
 
 ## 发现：两个类 + 两个数据

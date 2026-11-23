@@ -1,7 +1,7 @@
 package com.poria.netnsd.lobby
 
-import com.poria.core.game.GameCatalog
-import com.poria.core.game.GameInfo
+import com.poria.game.GameCatalog
+import com.poria.game.GameInfo
 
 /**
  * 服务器侧的大厅规则：座位、座次、玩法开关、准备状态、能不能开局。

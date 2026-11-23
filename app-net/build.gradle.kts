@@ -37,6 +37,9 @@ dependencies {
     // api：FoundHost 的 host/port 要直接喂给 core 的 Tcp.connect，下游不用再单独声明 :core
     api(project(":core"))
 
+    // 游戏目录/规则（GameCatalog）：大厅要用它校验"这个游戏几个人玩、有哪些玩法开关"
+    implementation(project(":game-core"))
+
     // ServiceDiscovery 用 channel + 挂起 for 循环把"一次只解析一个"交给结构化并发，
     // 省掉 pending 队列 + resolving 标志位；RoomSession 也用它做后台建房间/连接。
     // 注意：只有这一个模块用协程，:core 的 socket 层刻意保持零依赖（阻塞写，天然背压）。

@@ -14,7 +14,7 @@
 > payload 怎么收发、图片怎么推拉。
 
 ```
-core/                     纯 Kotlin 内核，零 Android 依赖
+core/                     纯 Kotlin 内核：一行一条消息怎么收怎么发。零 Android 依赖，**不含业务**
   src/main/kotlin/com/poria/net/          ★ 联网通信（纯 JVM，本机就能测）
     Wire.kt               行协议：一条消息 = 一行 UTF-8 + '\n'，单条上限 8KB
     Peer.kt               一条连接：收发 + 一条读线程，回调按序
@@ -22,12 +22,13 @@ core/                     纯 Kotlin 内核，零 Android 依赖
     TcpServer.kt          房主：监听端口，广播给所有连接
     Tcp.kt                客户端：Tcp.connect(host, port, listener) 拿到一条 Peer
     CloseCause.kt         LOCAL / REMOTE / ERROR，决定要不要重连
-  src/main/kotlin/com/poria/core/game/
-    GameCatalog.kt        ★ 游戏目录：能开哪些游戏、几个人玩、有哪些自定义玩法（加游戏只改这里）
   src/main/kotlin/com/poria/core/        时间 / 颜色 / 哈希这类纯工具
-  src/test/kotlin/com/poria/
-    net/WireTest.kt       行协议单测
-    net/TcpTest.kt        127.0.0.1 上真开 socket 的收发/断开/坏包/房主回环测试
+  src/test/kotlin/com/poria/             行协议 + 真 socket 测试（JVM 上秒跑）
+
+game-core/                游戏域内核：**有哪些游戏 + 每款游戏的规则**。纯叶子模块（谁的依赖都不加）
+  src/main/kotlin/com/poria/game/
+    GameCatalog.kt        ★ 游戏目录：能开哪些游戏、几个人玩、有哪些自定义玩法（加游戏只改这里）
+    （将来的 AzulEngine 等规则引擎也住这里）
 
 app-net/                  局域网层：发现（NSD）+ 链路（路由）+ 频道（大厅 / 资料 / 图片 / 会话）
   src/main/java/com/poria/netnsd/
@@ -74,7 +75,9 @@ app/                      唯一的应用模块：UI + MVI 的 ViewModel
     profile/ProfileStore.kt      昵称/头像的 DataStore 读写
 ```
 
-依赖方向：`:app` → `:base` → `:core`，以及 `:app` → `:app-net` → `:core`。反向依赖编译不过。
+依赖方向：`:app` → `:base` → `:core`，`:app` → `:app-net` → `:core`，
+以及 `:app` → `:game-core`、`:app-net` → `:game-core`（规则不依赖任何模块，只被别人依赖）。
+反向依赖编译不过。
 
 联网的分层（谁该知道什么）：
 
@@ -234,7 +237,7 @@ link.join(ip, port)
 - **准备 / 开局**：客人点「我准备好了」，服务器算出 `startHint`（人不够 → "还差 N 人"；有人没准备 →
   "还有 N 人没准备"；都齐了 → 空串），房主按钮上直接显示这个原因；按「开始游戏」时服务器再校验一遍。
   改人数、换游戏、开关玩法会清空所有人的准备状态（同一条规则）。
-- **游戏目录在 `:core` 的 `GameCatalog`**：加一款游戏 = 加一条 `GameInfo`（人数范围 + 玩法开关
+- **游戏目录在 `:game-core` 的 `GameCatalog`**：加一款游戏 = 加一条 `GameInfo`（人数范围 + 玩法开关
   的默认值）。首页的"今天能开"、设置面板的"选游戏 / 选人数 / 玩法开关"都照着它渲染，不用改 UI 代码。
 
 ## 下一步：把对局接进来
@@ -254,6 +257,7 @@ link.join(ip, port)
 
 ```bash
 ./gradlew :core:test          # 行协议 + 真 socket 测试，几秒跑完，不需要模拟器
+./gradlew :game-core:test     # 游戏目录/规则（同样是纯 JVM）
 ./gradlew :app-net:test       # 各频道协议 + 快照裁剪 + 大厅规则 + 真 socket 收发（JVM 单测）
 ./gradlew :app:assembleDebug  # 打包 APK
 ```
@@ -265,7 +269,7 @@ link.join(ip, port)
 | 消息怎么切（分隔符、长度上限） | `core/.../net/Wire.kt` |
 | 谁连谁、连接/广播/断开 | `core/.../net/TcpServer.kt`、`Tcp.kt`、`Peer.kt` |
 | 房主自己怎么连自己 | `TcpLink.host(0)` 里 `Tcp.connect("127.0.0.1", port)`，没有特殊代码 |
-| 加游戏 / 改人数范围 / 加玩法开关 | `core/.../game/GameCatalog.kt` |
+| 加游戏 / 改人数范围 / 加玩法开关 | `game-core/.../game/GameCatalog.kt` |
 | 链路（连接、心跳、谁发给谁、中转） | `app-net/.../link/TcpLink.kt`、`Frame.kt`、`TcpHandler.kt` |
 | 连接什么时候建、什么时候断 | `app-net/.../Session.kt`（`App.session`）+ `RoomsActivity.onStart` 的重置 |
 | 房间协议（加一条命令 / 快照加字段） | `app-net/.../lobby/LobbyProtocol.kt` |
@@ -286,18 +290,24 @@ link.join(ip, port)
 
 单人项目，边界由人定，AI 只填实现。**以下每一条都是"不许"**：
 
-1. 只有 `:core` / `:base` / `:app-net` / `:app` 四个模块，**禁止新增模块**。
-   分模块的唯一理由永远是"依赖不同"：`:core` 不碰 Android（所以 `:core:test` 秒跑），
-   `:app-net` 必须碰 Android（`NsdManager`），`:base` 是界面基建。说不清跟谁"依赖不同"就别拆。
+1. 只有 `:core` / `:game-core` / `:base` / `:app-net` / `:app` 五个模块，**禁止再增**。
+   分模块的理由只有两条：
+   - **依赖不同**：`:core` 不碰 Android（所以 `:core:test` 秒跑），`:app-net` 必须碰 Android（`NsdManager`），
+     `:base` 是界面基建；
+   - **变化速率不同**：`:core`（通信）已经稳定、几乎不改；`:game-core`（有哪些游戏 + 规则）随每加一款
+     游戏长大。它俩都是"纯 Kotlin + 零依赖"，靠变化速率分而不是靠依赖分——所以 `:game-core`
+    **必须是纯叶子模块**（谁的依赖都不加），这样拆出来零成本、也不会造成循环。
+    说不清属于哪一条就别拆。
 2. **依赖只许这几样**：AndroidX 基础库、Material、kotlinx-coroutines，外加**唯一一个例外**
-   `kotlinx-serialization-json`（只给 `:app-net` 的房间协议用：快照/命令都是 `@Serializable`
+   `kotlinx-serialization-json`（只给 `:app-net` 的频道协议用：快照/命令都是 `@Serializable`
    数据类）。socket 用 JDK 自带的 `java.net`，网络发现用系统的 `android.net.nsd`，
-   除此之外不引库；`:core` 仍然零依赖。
+   除此之外不引库；`:core` 和 `:game-core` 仍然零依赖。
 3. 禁止 Hilt / Koin / Dagger、RxJava、EventBus、Room、Navigation。
 4. 禁止"只有一个实现的接口"、禁止 UseCase / Repository / Mapper 分层、禁止自己写 DI 容器。
    （`TcpServer.Listener` / `ServiceDiscovery.Listener` 这类回调接口不算：它们是给调用方覆盖的，不是拿来注入的。）
-5. 规则判定只能写在 `:core`。UI 或 session 里出现"这张牌能不能出""现在能不能开局"的判断就是 bug——
+5. 规则判定只能写在 `:game-core`。UI 或 session 里出现"这张牌能不能出""现在能不能开局"的判断就是 bug——
    应该问 `GameCatalog` / 让服务器的 `Lobby` 给出 `startHint` 或拒绝原因。
+   `:core` 里**一行游戏规则都不许有**（它只管"一行一条消息怎么收发"）。
 6. **客户端不许有自己的房间状态**。名册、座位、设置、聊天记录都只能来自服务器推来的快照；
    客户端"先改本地再等服务器确认"是 bug（两份真相）。页面（Activity）连本地数据都不许攒：
    状态在 ViewModel 里、ViewModel 的状态来自快照，Activity 只渲染，最多留一个"最近一次状态"
@@ -323,13 +333,15 @@ link.join(ip, port)
 
 - `:core` 的 `com.poria.net` **只搬字符串**：不认识游戏，不认识 Android，**也不引协程**
   （阻塞写 = 天然背压；换 channel 就得回答"队列满了丢哪条消息"）。消息体是什么格式
-  由上层决定（房间这边是 JSON），这一层只管"一行一条、收发、断开"。
-- **一条链路，一个类型**：远端客人、房主自己（`127.0.0.1` 回环）都是 `Tcp.connect` 拿到的
+  由上层决定（大厅这边是 JSON），这一层只管"一行一条、收发、断开"。
+- `:game-core` **只有数据和规则**：不认识 socket、不认识 Android、不认识 JSON。
+  它答的是"这个游戏几个人玩、这步合不合法"，谁想发给谁完全是别人的事。
+- **一条链路，一个类型**：远端客人、服务器自己（`127.0.0.1` 回环）都是 `Tcp.connect` 拿到的
   `Peer`，`PeerListener` 也是同一个接口——**会话代码里不允许出现"这是房主所以走另一条路"的分支**。
 - `:app-net` 是**唯一能同时碰协程和 Android API** 的联网模块：NSD 发现（resolve 单飞队列用
-  `Channel` + 挂起 `for` 循环），以及各频道这一层（协议 / 规则 / 频道）。`Lobby` 刻意
-  不碰 socket（只改自己的状态），所以大厅规则能在 JVM 上单测；`LobbyChannel` 才把"谁该收到"
-  接上，`Session` 只负责建/关和持有。
+  `Channel` + 挂起 `for` 循环），以及各频道这一层（协议 / 频道）。`Lobby` 刻意
+  不碰 socket（只改自己的状态，规则来自 `:game-core`），所以大厅规则能在 JVM 上单测；
+  `LobbyChannel` 才把"谁该收到"接上，`Session` 只负责建/关和持有。
 - `:app` **只有 UI + MVI**：`RoomVM` / `RoomsVM` 从 `App.session` 拿连接、拼状态、转发动作，
   Activity 只做 `vm.state.collect { render }` + 把点击转给 VM；不解析协议、不判断谁能改设置
   （按钮灰不灰跟着快照走）、不持有链路。

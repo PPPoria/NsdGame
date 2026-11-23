@@ -11,7 +11,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.poria.base.ext.setOnClickListenerWithClickAnimation
 import com.poria.base.ui.BaseActivity
-import com.poria.core.game.GameCatalog
+import com.poria.game.GameCatalog
 import com.poria.netnsd.FoundHost
 import com.poria.netnsd.ServiceDiscovery
 import com.ppporia.nsdgames.App

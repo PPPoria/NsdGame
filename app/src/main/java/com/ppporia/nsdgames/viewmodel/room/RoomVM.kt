@@ -2,7 +2,7 @@ package com.ppporia.nsdgames.viewmodel.room
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.poria.core.game.GameCatalog
+import com.poria.game.GameCatalog
 import com.poria.netnsd.Session
 import com.poria.netnsd.blob.imageFile
 import com.poria.netnsd.blob.requestImage

@@ -40,7 +40,8 @@
 
 ```
 :app     ──→ :base   ──→ :core          反向依赖编译不过
-         └─→ :app-net ──→ :core
+         ├─→ :app-net ──→ :core
+         └─→ :game-core（纯叶子：谁的依赖都不加）
 
 core/.../net/            纯 JVM，零依赖（不引协程）
   Wire.kt                行协议：一行 UTF-8 + '\n'，单条上限 8KB
@@ -50,8 +51,9 @@ core/.../net/            纯 JVM，零依赖（不引协程）
   Tcp.kt                 Tcp.connect(host, port, listener): Peer（阻塞，别在主线程）
   CloseCause.kt          LOCAL / REMOTE / ERROR
 
-core/.../game/
-  GameCatalog.kt         游戏目录：GameInfo（人数范围/玩法开关）、GameOption、默认值
+game-core/.../game/      纯 JVM，零依赖：**有哪些游戏 + 游戏规则**（不含 socket / JSON / Android）
+  GameCatalog.kt         GameInfo（人数范围/玩法开关）、GameOption、默认值（加游戏只改这里）
+  （将来的 AzulEngine 等规则引擎也住这里）
 
 app-net/.../            可用协程 + Android API
   Nsd.kt                 服务类型串 + FoundHost(serviceName, host, port)
@@ -410,7 +412,7 @@ UI 侧一律"收 `StateFlow` → 渲染"，所以**任何地方都不用自己 `
 
 | 现在 | 对局版 |
 |---|---|
-| `LobbyProtocol.Command` + `LobbyChannel.onCommand` | 大厅换成一个新的 `azul` 频道（`AzulChannel`）：命令进 `AzulProtocol.Command`，规则调 `:core` 的引擎 |
+| `LobbyProtocol.Command` + `LobbyChannel.onCommand` | 大厅换成一个新的 `azul` 频道（`AzulChannel`）：命令进 `AzulProtocol.Command`，规则调 `:game-core` 的引擎 |
 | `LobbySnapshot.messages`（`lobby` 的快照） | 对局快照 `AzulSnapshot` 里加 `table`（工厂区 / 中央区 / 各家手牌 / 当前回合） |
 | `Lobby.start()` 里那句"还在施工" | `phase = LobbyPhase.Playing` + `clearReadyLocked()` + `publish()` |
 | `LobbySnapshot.startHint` | 换成"该谁动"这类服务端算出来的状态 |
@@ -422,11 +424,11 @@ UI 侧一律"收 `StateFlow` → 渲染"，所以**任何地方都不用自己 `
 对局页从 `App.session.connection` 拿 `link`，所以"房间 → 对局"不需要传任何东西；
 回大厅就是退了对局页，`lobby` 和 `Lobby` 还在原处。开局时的名册从 `connection.lobby` 的快照里取。
 
-**规则裁决必须留在 `:core`**（将来的 `AzulEngine` / 规则状态机）。`Lobby` 只做
+**规则裁决必须留在 `:game-core`**（将来的 `AzulEngine` / 规则状态机）。`Lobby` 只做
 "谁的回合能发什么命令、该广播给谁"，它不判断花色/图案怎么放——这条线越了就会出现
 "客户端和服务端各有一套判定"的经典 bug。
 
-新游戏进目录只要改 `GameCatalog`：加一条 `GameInfo`（`id` / `title` / 人数范围 /
+新游戏进目录只要改 `:game-core` 的 `GameCatalog`：加一条 `GameInfo`（`id` / `title` / 人数范围 /
 `options` 默认值），设好 `available = true`。首页和设置面板会自己跟着变。
 
 ## 8. 已验证 / 未验证

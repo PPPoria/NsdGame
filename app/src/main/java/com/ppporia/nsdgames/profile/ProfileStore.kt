@@ -3,12 +3,7 @@ package com.ppporia.nsdgames.profile
 import com.poria.base.store.DSManager
 import com.ppporia.nsdgames.ui.Avatars
 import java.util.Base64
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.launch
 
 /**
  * 本机的"我是谁"：昵称 + 头像。存在 base 的 [DSManager]（DataStore Preferences）里，key 前缀 `profile.`。
@@ -22,9 +17,11 @@ import kotlinx.coroutines.launch
 object ProfileStore {
 
     private const val KEY_NICKNAME = "profile.nickname"
+    private const val KEY_SIGNATURE = "profile.signature"
     private const val KEY_AVATAR = "profile.avatar"
 
     val nicknameFlow = DSManager.getString(KEY_NICKNAME)
+    val signatureFlow = DSManager.getString(KEY_SIGNATURE)
     val avatarFlow = DSManager.getString(KEY_AVATAR).map { encoded ->
         if (encoded.isEmpty()) null
         else runCatching {
@@ -36,6 +33,10 @@ object ProfileStore {
 
     suspend fun saveNickname(name: String) {
         runCatching { DSManager.setString(KEY_NICKNAME, name.trim()) }
+    }
+
+    suspend fun saveSignature(signature: String) {
+        runCatching { DSManager.setString(KEY_SIGNATURE, signature.trim()) }
     }
 
     suspend fun saveAvatar(avatar: Avatars.AvatarBytes?) {

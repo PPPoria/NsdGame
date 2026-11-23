@@ -7,8 +7,8 @@ import android.widget.RadioButton
 import android.widget.RadioGroup
 import androidx.core.view.isVisible
 import com.google.android.material.bottomsheet.BottomSheetDialog
-import com.poria.core.game.GameCatalog
-import com.poria.core.game.GameInfo
+import com.poria.game.GameCatalog
+import com.poria.game.GameInfo
 import com.poria.netnsd.lobby.LobbySnapshot
 import com.ppporia.nsdgames.R
 import com.ppporia.nsdgames.databinding.ItemOptionSwitchBinding

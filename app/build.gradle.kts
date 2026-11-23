@@ -49,7 +49,7 @@ dependencies {
     // 走 base 就能拿到 appcompat / material / activity / fragment / lifecycle / coroutines / core
     implementation(project(":base"))
     // 显式声明：app 直接用 GameCatalog（游戏目录）
-    implementation(project(":core"))
+    implementation(project(":game-core"))
     // 联网的房间发现：ServiceDiscovery / ServiceAdvertiser（顺带把 TcpServer / TcpClient 带进来）
     implementation(project(":app-net"))
     implementation(libs.androidx.appcompat)
