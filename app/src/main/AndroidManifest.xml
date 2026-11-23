@@ -13,7 +13,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.NsdGames">
         <activity
-            android:name=".ui.azul.AzulDesktopActivity"
+            android:name=".ui.azul.AzulGameActivity"
             android:exported="false" />
         <activity
             android:name=".ui.rooms.RoomsActivity"
