@@ -421,6 +421,28 @@ binding.buttonPlace.setOnClickListenerWithClickAnimation {         // 2. 点击 
 三个老规矩照样适用：**不存状态**（渲染完就丢，最多留一个"最近一次状态"给弹面板时读一眼）、
 **不解析协议**（`Frame`、`JsonElement` 都不该出现在 `:app`）、**不判规则**（按钮灰不灰跟着快照走）。
 
+### 6.1 一个真踩过的坑：`stateIn` 会按 equals 去重
+
+```
+combine(几个流) → map { 拍平成 UiState } → stateIn(...)      ← StateFlow
+```
+
+StateFlow **只在值不相等时才发射**。所以只要"渲染要用到的某样东西"没进 UI 状态，
+它在后台变化时那次更新就会被**静默吞掉**，界面要等下一次别的变化才刷新。
+
+房间页的原版 bug 就是这个形状：`blob.available` 参与了 combine，但 `RoomUiState` 里没有它——
+座位只带 `avatarId`，图到没到是 Activity 里临时查的。于是"第一次下完头像"这条更新
+产出的状态和上一份**完全相等**，`stateIn` 不发射、`render` 不跑，头像要等下一个事件才出现
+（图已经在缓存里时反而正常，因为第一次渲染就拿得到——这就是"只复现一次"的原因）。
+
+两条规矩：
+
+- **UI 状态里包含渲染依赖的每一样东西**。文件路径、进度值都算——拿不准就把"解析结果"放进
+  状态（房间的做法是 `SeatUi.avatar: File?`，由 VM 用 `session.imageFile(id)` 查好），
+  而不是让 Activity 去后台查表；
+- 反过来说，`stateIn` 的去重是**好事**：它能挡住无意义的重绘。别用 `MutableStateFlow` 手推、
+  也别为了绕过它加"随机 tick"——那是把 bug 藏起来。
+
 ## 7. 怎么测（不需要模拟器）
 
 三档，按性价比从高到低：

@@ -16,6 +16,7 @@ import com.ppporia.nsdgames.databinding.ActivityRoomBinding
 import com.ppporia.nsdgames.viewmodel.room.RoomUiState
 import com.ppporia.nsdgames.viewmodel.room.RoomVM
 import com.ppporia.nsdgames.viewmodel.room.SeatTag
+import java.io.File
 
 /**
  * 游戏准备房间页，**纯 View 层**：
@@ -183,20 +184,20 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
             },
             occupied = seat.occupied,
             mine = seat.mine,
-            avatar = seat.avatarId.takeIf { it.isNotEmpty() }?.let { avatarOf(it) },
+            avatar = seat.avatar?.let { avatarOf(it) },
         )
     }
 
     /**
-     * 头像 id → 小图。没有（还没拉回来）就返回 `null`，座位卡先不画头像；
-     * 拉回来之后 ViewModel 会再推一次状态，这里就能取到了。
+     * 头像文件 → 小图。
+     *
+     * 文件是 ViewModel 解析好放进状态里的（没下载完就是 `null`），这里只负责解码 + 缓存；
+     * 同一张图（路径就是内容 id）整个会话只解一次。
      */
-    private fun avatarOf(id: String): Bitmap? {
-        avatarBitmaps[id]?.let { return it }
-        val file = vm.blobFile(id) ?: return null
-        val bitmap =
-            runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull() ?: return null
-        avatarBitmaps[id] = bitmap
+    private fun avatarOf(file: File): Bitmap? {
+        avatarBitmaps[file.path]?.let { return it }
+        val bitmap = runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull() ?: return null
+        avatarBitmaps[file.path] = bitmap
         return bitmap
     }
 

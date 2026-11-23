@@ -354,6 +354,9 @@ RoomActivity                                     （只拼字符串、解 Bitmap
 - VM 的输入是四条流；**没有一个字段是客户端算出来的房间数据**（`startHint` 也是服务器给的）。
 - **名字/头像来自 `profile`**：座位条和聊天列表按 id 去资料表里查；查不到就显示占位 `…`
   （`SeatUi.occupied` 和 `SeatUi.name` 是两件事：座位上有人 ≠ 资料到了）。
+- **头像文件在 VM 里就解析完**（`SeatUi.avatar: File?`）。这不是洁癖：`state` 是 StateFlow，
+  按 equals 去重，如果"图下完了"没体现在 `RoomUiState` 里，这次更新会被吞掉——
+  症状就是"第一次拉头像要等下一次 UI 刷新才出现"（见 `docs/handler-channel-guide.md` 6.1）。
 - VM 的副作用只有一件：资料里带了头像 id 而本机还没下，就 `requestImage(id, owner)`
   （`BlobChannel.request` 自带去重；**owner 就是资料表里的 key**，不用再从快照里猜）。
 - **`onCleared` 里什么都不做**：连接属于进程。转屏、退到对局页都不该断别人；

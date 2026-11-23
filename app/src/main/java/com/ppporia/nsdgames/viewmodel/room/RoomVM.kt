@@ -136,9 +136,6 @@ class RoomVM : ViewModel() {
         session.kick(playerId)
     }
 
-    /** 缓存里可用的头像文件；没有就返回 `null`——UI 先画占位，等 `images` 推一次再来取。 */
-    fun blobFile(id: String): File? = session.imageFile(id)
-
     /**
      * 资料里带了头像 id 的，本机还没有就去要。
      *
@@ -173,65 +170,72 @@ class RoomVM : ViewModel() {
         val link: TcpLink.LinkState,
         val images: Set<String>,
     ) {
-        fun toUiState(): RoomUiState {
-            val snapshot = lobby.snapshot
-            val game = snapshot?.let { GameCatalog.byId(it.gameId) }
-            return RoomUiState(
-                title = snapshot?.roomName.orEmpty(),
-                gameTitle = game?.title.orEmpty(),
-                gameKnown = game != null,
-                playerCount = snapshot?.players?.size ?: 0,
-                tableSize = snapshot?.tableSize ?: 0,
-                phase = lobby.phase,
-                note = lobby.note,
-                hostless = snapshot != null && snapshot.hostId.isEmpty(),
-                online = lobby.online,
-                host = lobby.iAmHost,
-                ready = lobby.iAmReady,
-                startHint = snapshot?.startHint.orEmpty(),
-                seats = snapshot?.seatModels(lobby.myId, profiles).orEmpty(),
-                messages = messagesOf(snapshot, profiles, lobby.myId),
-                myId = lobby.myId,
-                names = profiles.mapValues { (_, profile) -> profile.name.ifEmpty { UNKNOWN_NAME } },
-                snapshot = snapshot,
-            )
-        }
-
         companion object {
             val EMPTY = RoomSource(LobbyState(), emptyMap(), TcpLink.LinkState(), emptySet())
         }
+    }
+
+    /**
+     * 把几股流拍平成 UI 状态。
+     *
+     * **图片也在这里解析掉**（`SeatUi.avatar` 直接是文件）：`state` 是 StateFlow，会按 equals 去重，
+     * 所以"渲染要用到的每一样东西"都必须进 [RoomUiState]——不然图下完了、状态没变，
+     * 这次更新会被悄悄吞掉（症状就是"第一次拉头像要等下一次 UI 刷新才出现"）。
+     */
+    private fun RoomSource.toUiState(): RoomUiState {
+        val snapshot = lobby.snapshot
+        val game = snapshot?.let { GameCatalog.byId(it.gameId) }
+        return RoomUiState(
+            title = snapshot?.roomName.orEmpty(),
+            gameTitle = game?.title.orEmpty(),
+            gameKnown = game != null,
+            playerCount = snapshot?.players?.size ?: 0,
+            tableSize = snapshot?.tableSize ?: 0,
+            phase = lobby.phase,
+            note = lobby.note,
+            hostless = snapshot != null && snapshot.hostId.isEmpty(),
+            online = lobby.online,
+            host = lobby.iAmHost,
+            ready = lobby.iAmReady,
+            startHint = snapshot?.startHint.orEmpty(),
+            seats = snapshot?.seatModels(lobby.myId, profiles).orEmpty(),
+            messages = messagesOf(snapshot, profiles, lobby.myId),
+            myId = lobby.myId,
+            names = profiles.mapValues { (_, profile) -> profile.name.ifEmpty { UNKNOWN_NAME } },
+            snapshot = snapshot,
+        )
+    }
+
+    /** 座位号 = 出手顺序；空位也占一个位子。头像在这里就换成文件（没有就是 `null`）。 */
+    private fun LobbySnapshot.seatModels(
+        myId: String,
+        profiles: Map<String, Profile>,
+    ): List<SeatUi> = (0 until tableSize).map { seat ->
+        val player = playerAt(seat)
+        val profile = player?.let { profiles[it.id] }
+        SeatUi(
+            seat = seat,
+            occupied = player != null,
+            name = when {
+                player == null -> ""
+                profile == null || profile.name.isEmpty() -> UNKNOWN_NAME
+                else -> profile.name
+            },
+            tag = when {
+                player == null -> SeatTag.NONE
+                isHost(player.id) -> SeatTag.HOST
+                isReady(player.id) -> SeatTag.READY
+                else -> SeatTag.WAITING
+            },
+            mine = player != null && player.id == myId,
+            avatar = profile?.avatarId?.takeIf { it.isNotEmpty() }?.let(session::imageFile),
+        )
     }
 
     companion object {
         /** 名册里有人、但资料还没到时的占位（不是空座，是"人在、资料在路上"）。 */
         const val UNKNOWN_NAME = "…"
     }
-}
-
-/** 座位号 = 出手顺序；空位也占一个位子。 */
-private fun LobbySnapshot.seatModels(
-    myId: String,
-    profiles: Map<String, Profile>,
-): List<SeatUi> = (0 until tableSize).map { seat ->
-    val player = playerAt(seat)
-    val profile = player?.let { profiles[it.id] }
-    SeatUi(
-        seat = seat,
-        occupied = player != null,
-        name = when {
-            player == null -> ""
-            profile == null || profile.name.isEmpty() -> RoomVM.UNKNOWN_NAME
-            else -> profile.name
-        },
-        tag = when {
-            player == null -> SeatTag.NONE
-            isHost(player.id) -> SeatTag.HOST
-            isReady(player.id) -> SeatTag.READY
-            else -> SeatTag.WAITING
-        },
-        mine = player != null && player.id == myId,
-        avatarId = profile?.avatarId.orEmpty(),
-    )
 }
 
 /** UI 要渲染的房间状态：由 [RoomVM] 拼装 + 拍平而来，客户端不自己攒。 */
@@ -271,6 +275,10 @@ data class RoomUiState(
  *
  * [occupied] 和 [name] 是两件事：座位上有人（快照说的）和资料到没到（profile 频道说的）。
  * 人在、资料还没到时 [name] 是 `…`，不是空位。
+ *
+ * [avatar] 是**已经解析好的图片文件**（VM 查的），没下载完就是 `null`。
+ * 它必须在状态里，否则"图下完了"这件事不会让 [RoomUiState] 发生变化——
+ * `stateIn` 的 StateFlow 按 equals 去重，那次更新就被吞了。
  */
 data class SeatUi(
     val seat: Int,
@@ -278,7 +286,7 @@ data class SeatUi(
     val name: String,
     val tag: SeatTag,
     val mine: Boolean,
-    val avatarId: String,
+    val avatar: File?,
 )
 
 enum class SeatTag { NONE, HOST, READY, WAITING }

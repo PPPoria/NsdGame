@@ -212,11 +212,20 @@ class BlobChannelTest {
         assertEquals("报到没完成：${link.state.value.players}", count, link.state.value.players.size)
     }
 
+    /**
+     * 等一张图"能画"：文件收齐 **并且** `available` 里出现过。
+     *
+     * 两件事之间有一个微秒级的窗口（`store.put` 落地 → 更新 `available`），
+     * 只等 `contains` 就断言 `available` 会偶发失败。
+     */
     private fun awaitBlob(channel: BlobChannel, id: String) {
         val deadline = System.currentTimeMillis() + 20_000
-        while (!channel.contains(id) && System.currentTimeMillis() < deadline) {
+        while ((!channel.contains(id) || id !in channel.available.value) &&
+            System.currentTimeMillis() < deadline
+        ) {
             Thread.sleep(10)
         }
         assertTrue("图没到，进度：${channel.progress.value}", channel.contains(id))
+        assertTrue("收齐了但 available 里没有", id in channel.available.value)
     }
 }
