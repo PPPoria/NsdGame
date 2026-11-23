@@ -9,7 +9,7 @@ import androidx.core.view.isVisible
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.poria.base.ext.setOnClickListenerWithClickAnimation
 import com.poria.base.ui.BaseActivity
-import com.poria.netnsd.room.SessionPhase
+import com.poria.netnsd.lobby.SessionPhase
 import com.ppporia.nsdgames.App
 import com.ppporia.nsdgames.R
 import com.ppporia.nsdgames.databinding.ActivityRoomBinding
@@ -174,14 +174,14 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
     private fun seatItems(state: RoomUiState): List<SeatInfo> = state.seats.map { seat ->
         SeatInfo(
             seat = seat.seat,
-            name = seat.name ?: getString(R.string.room_seat_empty),
+            name = if (seat.occupied) seat.name else getString(R.string.room_seat_empty),
             tag = when (seat.tag) {
                 SeatTag.HOST -> getString(R.string.room_seat_host)
                 SeatTag.READY -> getString(R.string.room_seat_ready)
                 SeatTag.WAITING -> getString(R.string.room_seat_waiting)
                 SeatTag.NONE -> ""
             },
-            occupied = seat.name != null,
+            occupied = seat.occupied,
             mine = seat.mine,
             avatar = seat.avatarId.takeIf { it.isNotEmpty() }?.let { avatarOf(it) },
         )
@@ -229,6 +229,7 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
             seat = seat,
             snapshot = snapshot,
             myId = uiState.myId,
+            names = uiState.names,
             canArrange = uiState.host,
             onTakeSeat = { vm.takeSeat(it) },
             onSwap = { a, b -> vm.swapSeats(a, b) },

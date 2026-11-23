@@ -4,8 +4,8 @@
 > 结论先给：**一个页面一套频道 = 一个协议文件 + 一个 Handler 类 + VM 里两行注册/注销**，
 > 链路（`TcpLink`）和 `Session` 一行都不用改。
 >
-> 完整的参照实现就是房间那一套：`app-net/.../room/LobbyProtocol.kt` +
-> `room/LobbyChannel.kt` + `room/RoomCommands.kt`。这份指南本质上是"照着抄一遍"。
+> 完整的参照实现就是房间那一套：`app-net/.../lobby/LobbyProtocol.kt` +
+> `lobby/LobbyChannel.kt` + `lobby/LobbyCommands.kt`，资料频道是 `profile/`。这份指南本质上是"照着抄一遍"。
 
 ## 0. 先说清三个角色（别把"服务器"和"房主"当一个东西）
 
@@ -296,7 +296,7 @@ class AzulChannel(
 要点：
 
 - 上面代码里的 `Round`（规则引擎）、`AzulState` / `Phase`（UI 侧状态）是**示意类型**，
-  照着自己的业务起名即可；对应房间那一套就是 `Room` 和 `RoomState`/`SessionPhase`。
+  照着自己的业务起名即可；对应房间那一套就是 `Lobby` 和 `LobbyState`/`SessionPhase`。
 - **服务端半边只改规则、只推快照**，从不写 `_state`；**客户端半边只写 `_state`**。
   这样"谁是权威"在代码结构上就一眼看得出来，不会出现两份真相。
 - **规则本身不碰网络**：`Round`（或 `:core` 的引擎）只管"这步合不合法"，返回 `null`/拒绝原因；
@@ -350,7 +350,7 @@ class AzulVM : ViewModel() {
 
 ### 4.2 命令写成扩展函数
 
-和 `room/RoomCommands.kt` 一个套路：命令是协议的事，不要往 `Session` 上加方法。
+和 `lobby/LobbyCommands.kt` 一个套路：命令是协议的事，不要往 `Session` 上加方法。
 
 ```kotlin
 fun Session.place(row: Int, factory: Int, color: Int) = sendAzul(AzulProtocol.Command.Place(row, factory, color))
@@ -388,6 +388,15 @@ while (true) {
 **大对象不进 payload**：图片/纹理/存档一律走 `blob`（附录 A）。8KB 是"一条消息"的上限，
 不是"传输容量"。
 
+**快照只装"权威"**：判据是一句话——**这条数据会不会改变"谁能做什么"？**
+会（身份、座位、回合、准备、设置）→ 进快照，服务器算好再推；
+不会（昵称、头像、签名、装饰）→ **另开频道**。
+这条不是洁癖，是踩过的坑：资料塞在快照里，它什么时候就绪就由别人说了算——
+房间原有的例子是"头像没装好就进房，别人得等下一份快照才知道"。
+现在它们是 `profile` 频道：**推**（`put` → 广播 `info`）管"我的资料变了"，
+**拉**（`want` → 本人回 `info`，也可以不回）管"我刚进来，把不认识的人问一遍"。
+房间快照只留 id。
+
 **私有信息用 `broadcastEach`**：别先广播再让客户端"别显示"——那是把秘密交给对方保管。
 
 **校验在服务器**：长度上限、数值范围、是不是你的回合、你在这局里吗——都在服务器侧判，
@@ -417,12 +426,12 @@ binding.buttonPlace.setOnClickListenerWithClickAnimation {         // 2. 点击 
 三档，按性价比从高到低：
 
 1. **纯逻辑**：规则、编解码、裁剪。对着 `snapshot()` / 返回值断言，不碰 socket。
-   模板：`room/RoomTest.kt`、`room/LobbyProtocolTest.kt`。
+   模板：`lobby/LobbyTest.kt`、`lobby/LobbyProtocolTest.kt`。
 2. **真 socket 两端**：同一个 JVM 里开两个 `TcpLink`（`:app-net` 里能造）：
    一个 `host()`（服务器 + 它自己那条回环客户端），一个 `join()`（客户端）。
    服务器侧注册带引擎的频道，客户端侧注册同一个类的另一半，然后断言两边的 `state`
    收敛到同一份快照——`LobbyOverLinkTest` 里的"报到之后两边拿到同一份快照"就是这个形状。
-   模板：`room/LobbyOverLinkTest.kt`、`blob/BlobChannelTest.kt`。
+   模板：`lobby/LobbyOverLinkTest.kt`、`profile/ProfileChannelTest.kt`、`blob/BlobChannelTest.kt`。
 3. **手工**：设备自带 `nc`，直接发帧，`docs/room-reference.md` 第 9 节有脚本。
 
 ```bash
@@ -448,8 +457,9 @@ session.connection?.link?.send(AzulProtocol.NS, AzulProtocol.encode(Event.Textur
 ### A.2 拉一张图
 
 ```kotlin
-// 1) 谁拥有这张图？—— 业务快照说了算（不是 blob 频道的事）
-val owner = snapshot.players.firstOrNull { it.texture == id }?.id ?: return
+// 1) 谁拥有这张图？—— 业务数据说了算（不是 blob 频道的事）。
+//    房间用的是 profile 频道：Map<id, Profile> 的 key 就是本人，头像 id 在 value 里。
+val owner = profiles.entries.firstOrNull { it.value.avatarId == id }?.key ?: return
 
 // 2) 要
 session.requestImage(id, owner)

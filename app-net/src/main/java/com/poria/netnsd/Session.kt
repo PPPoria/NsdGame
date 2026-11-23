@@ -4,10 +4,12 @@ import android.content.Context
 import com.poria.netnsd.blob.BlobChannel
 import com.poria.netnsd.blob.BlobStore
 import com.poria.netnsd.link.TcpLink
-import com.poria.netnsd.room.LobbyChannel
-import com.poria.netnsd.room.LobbyProtocol
-import com.poria.netnsd.room.RoomState
-import com.poria.netnsd.room.mergedWith
+import com.poria.netnsd.lobby.LobbyChannel
+import com.poria.netnsd.lobby.LobbyProtocol
+import com.poria.netnsd.lobby.LobbyState
+import com.poria.netnsd.lobby.mergedWith
+import com.poria.netnsd.profile.Profile
+import com.poria.netnsd.profile.ProfileChannel
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -16,9 +18,9 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 /**
- * 一条连接上的三样东西：链路、图片频道、房间频道。
+ * 一条连接上的常驻频道：链路、图片、资料、大厅。
  *
- * 它们同生共死（链路一关，图片和房间频道就没地方发帧了），所以绑在一起；
+ * 它们同生共死（链路一关，频道就没地方发帧了），所以绑在一起；
  * 它**不是**"会话门面"：没有命令方法、不拼状态，页面要做什么都自己拿这几个对象去做。
  *
  * 构造器是 `internal` 的：只有 `:app-net` 里的 [Session] 能造出它，页面伪造不了。
@@ -26,15 +28,18 @@ import kotlinx.coroutines.withContext
 class Connection internal constructor(
     val link: TcpLink,
     val blob: BlobChannel,
+    /** 昵称 / 签名 / 头像 id——显示用的，不参与任何判定。 */
+    val profile: ProfileChannel,
     val lobby: LobbyChannel,
 ) {
 
     /**
-     * 当前该画的状态：房间快照 + 链路状态 + 已经能画的图。
+     * 当前该画的状态：大厅快照 + 链路状态 + 已经能画的图。
      *
-     * UI 层订阅时用它做起手值（三股流各取一次当前值），免得第一帧闪一下"连接中"。
+     * UI 层订阅时用它做起手值（几股流各取一次当前值），免得第一帧闪一下"连接中"。
+     * 资料表在 `profile.profiles` 里，由 VM 一起 combine。
      */
-    val initialState: RoomState
+    val initialState: LobbyState
         get() = lobby.state.value.mergedWith(link.state.value, blob.available.value)
 }
 
@@ -161,22 +166,27 @@ class Session private constructor(context: Context) {
 
     // ── 内部 ────────────────────────────────────────────────────────────────
 
-    /** 把新链路登记成"当前连接"，并把常驻频道挂上去（图片 + 房间）。 */
+    /** 把新链路登记成"当前连接"，并把常驻频道挂上去（图片 + 资料 + 大厅）。 */
     private fun open(link: TcpLink, lobby: LobbyChannel): Connection {
-        // 图片内容寻址、可随时重新拉，所以房主和客人共用一个目录，省得两套配额
+        // 图片内容寻址、可随时重新拉，所以服务器和客户端共用一个目录，省得两套配额
         val blob = BlobChannel(BlobStore(File(appContext.filesDir, "blobs")))
+        val profile = ProfileChannel()
         link.register(blob)
+        link.register(profile)
         link.register(lobby)
-        return Connection(link, blob, lobby).also { connection = it }
+        return Connection(link, blob, profile, lobby).also { connection = it }
     }
 
-    /** 进房（链路层的报到和身份分配已经在 `host`/`join` 里做完了）+ 带进来的头像。 */
+    /**
+     * 进房：先把资料报上去（昵称 / 头像），再进房。
+     *
+     * 顺序有意为之：资料先到，别人拿到名册时就能对上名字；
+     * 而头像图片本体走 `blob`，资料里只留内容 id。
+     */
     private fun enter(connection: Connection, playerName: String, avatar: ByteArray?) {
-        send(connection, LobbyProtocol.Command.Join(playerName))
-
-        val bytes = avatar ?: return
-        val id = connection.blob.install(bytes) ?: return
-        send(connection, LobbyProtocol.Command.SetAvatar(id))
+        val avatarId = avatar?.let { connection.blob.install(it) }.orEmpty()
+        connection.profile.publish(Profile(name = playerName, avatarId = avatarId))
+        send(connection, LobbyProtocol.Command.Join)
     }
 
     private fun send(connection: Connection, command: LobbyProtocol.Command) {

@@ -4,7 +4,7 @@ import android.app.Activity
 import android.view.LayoutInflater
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.button.MaterialButton
-import com.poria.netnsd.room.RoomSnapshot
+import com.poria.netnsd.lobby.LobbySnapshot
 import com.ppporia.nsdgames.R
 import com.ppporia.nsdgames.databinding.SheetSeatBinding
 
@@ -12,16 +12,19 @@ import com.ppporia.nsdgames.databinding.SheetSeatBinding
  * 座位面板：点座位条上的一个座位弹出来。
  *
  * 里面只放"这个座位现在能做的动作"，动作本身只是回调到会话层发命令
- * （最终由服务端判定并广播新快照，这里不改任何状态）：
+ * （最终由服务器判定并广播新快照，这里不改任何状态）：
  *
  * - 空位：我坐这里 / 房主把某个人挪过来
  * - 有人：和我换座位（房主）/ 请他离开（房主）
+ *
+ * 面板拿到的快照里**只有 id 和座位**，名字靠 [names]（来自 `profile` 频道）查。
  */
 fun showSeatSheet(
     activity: Activity,
     seat: Int,
-    snapshot: RoomSnapshot,
+    snapshot: LobbySnapshot,
     myId: String,
+    names: Map<String, String>,
     canArrange: Boolean,
     onTakeSeat: (Int) -> Unit,
     onSwap: (Int, Int) -> Unit,
@@ -30,6 +33,8 @@ fun showSeatSheet(
     val dialog = BottomSheetDialog(activity)
     val binding = SheetSeatBinding.inflate(LayoutInflater.from(activity))
     dialog.setContentView(binding.root)
+
+    fun nameOf(id: String): String = names[id]?.ifEmpty { null } ?: activity.getString(R.string.room_seat_unknown)
 
     val occupant = snapshot.playerAt(seat)
     val me = snapshot.player(myId)
@@ -45,13 +50,14 @@ fun showSeatSheet(
         }
         if (canArrange) {
             snapshot.players.filter { it.id != myId }.forEach { player ->
-                actions += activity.getString(R.string.seat_move_here, player.name) to {
+                actions += activity.getString(R.string.seat_move_here, nameOf(player.id)) to {
                     onSwap(player.seat, seat)
                 }
             }
         }
     } else {
-        binding.textSeatTitle.text = activity.getString(R.string.seat_title_occupied, seat + 1, occupant.name)
+        binding.textSeatTitle.text =
+            activity.getString(R.string.seat_title_occupied, seat + 1, nameOf(occupant.id))
         binding.textSeatDesc.text = activity.getString(
             if (canArrange) R.string.seat_desc_arrange else R.string.seat_desc_view,
         )
@@ -59,8 +65,8 @@ fun showSeatSheet(
             if (me != null && me.seat != seat) {
                 actions += activity.getString(R.string.seat_swap_me) to { onSwap(me.seat, seat) }
             }
-            if (!occupant.host) {
-                actions += activity.getString(R.string.seat_kick, occupant.name) to { onKick(occupant.id) }
+            if (!snapshot.isHost(occupant.id)) {
+                actions += activity.getString(R.string.seat_kick, nameOf(occupant.id)) to { onKick(occupant.id) }
             }
         }
     }

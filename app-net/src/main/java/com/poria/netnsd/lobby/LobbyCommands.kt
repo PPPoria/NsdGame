@@ -1,16 +1,14 @@
-package com.poria.netnsd.room
+package com.poria.netnsd.lobby
 
 import com.poria.netnsd.Session
 
 /**
- * 房间动作（客户端 → 房主）：**只有命令，没有图片**。
- *
- * 图片是链路级的东西（`blob` 频道），跟房间没有关系，所以全在 `blob/BlobCommands.kt`：
- * 谁拥有某张图由**持有快照的那一层**自己算（房间页看 `players[].avatar`），
- * blob 频道只认 `(id, ownerId)`。
+ * 大厅动作（客户端 → 服务器）。
  *
  * 都是**扩展函数**而不是 `Session` 的方法：这样会话对象不用越长越胖，各业务的命令各写各的文件。
- * 全都是"发出去就不管了"：能不能生效由服务端说了算，结果以推回来的快照为准。
+ * 全都是"发出去就不管了"：能不能生效由服务器说了算，结果以推回来的快照为准。
+ *
+ * 图片不在这里（`blob/BlobCommands.kt`），名字头像也不在这里（`profile/`）。
  */
 
 fun Session.say(text: String) {

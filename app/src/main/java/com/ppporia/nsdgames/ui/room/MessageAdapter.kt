@@ -7,7 +7,8 @@ import androidx.core.view.isVisible
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
-import com.poria.netnsd.room.RoomSnapshot
+import com.poria.netnsd.lobby.LobbySnapshot
+import com.poria.netnsd.profile.Profile
 import com.ppporia.nsdgames.R
 import com.ppporia.nsdgames.databinding.ItemMessageBinding
 
@@ -20,14 +21,21 @@ data class RoomMessageItem(
 )
 
 /**
- * 快照 → 消息列表。发送者昵称也从快照里的人查（服务端说谁是谁，客户端不自己记）。
+ * 快照 → 消息列表。
+ *
+ * 消息里只有 `playerId`（房间快照不装名字），昵称去 `profile` 频道给的资料表里查；
+ * 资料还没到就先显示占位。
  */
-fun messagesOf(snapshot: RoomSnapshot?, myId: String): List<RoomMessageItem> {
+fun messagesOf(
+    snapshot: LobbySnapshot?,
+    profiles: Map<String, Profile>,
+    myId: String,
+): List<RoomMessageItem> {
     val messages = snapshot?.messages ?: return emptyList()
     return messages.map { message ->
         RoomMessageItem(
             seq = message.seq,
-            sender = snapshot.player(message.playerId)?.name ?: "…",
+            sender = profiles[message.playerId]?.name?.ifEmpty { null } ?: "…",
             text = message.text,
             mine = message.playerId == myId,
         )

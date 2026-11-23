@@ -3,21 +3,24 @@ package com.ppporia.nsdgames.viewmodel.room
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.poria.core.game.GameCatalog
+import com.poria.netnsd.Session
 import com.poria.netnsd.blob.imageFile
 import com.poria.netnsd.blob.requestImage
-import com.poria.netnsd.room.RoomSnapshot
-import com.poria.netnsd.room.RoomState
-import com.poria.netnsd.room.SessionPhase
-import com.poria.netnsd.room.kick
-import com.poria.netnsd.room.mergedWith
-import com.poria.netnsd.room.say
-import com.poria.netnsd.room.selectGame
-import com.poria.netnsd.room.setOption
-import com.poria.netnsd.room.setReady
-import com.poria.netnsd.room.setTableSize
-import com.poria.netnsd.room.start
-import com.poria.netnsd.room.swapSeats
-import com.poria.netnsd.room.takeSeat
+import com.poria.netnsd.link.TcpLink
+import com.poria.netnsd.lobby.LobbySnapshot
+import com.poria.netnsd.lobby.LobbyState
+import com.poria.netnsd.lobby.SessionPhase
+import com.poria.netnsd.lobby.kick
+import com.poria.netnsd.lobby.mergedWith
+import com.poria.netnsd.lobby.say
+import com.poria.netnsd.lobby.selectGame
+import com.poria.netnsd.lobby.setOption
+import com.poria.netnsd.lobby.setReady
+import com.poria.netnsd.lobby.setTableSize
+import com.poria.netnsd.lobby.start
+import com.poria.netnsd.lobby.swapSeats
+import com.poria.netnsd.lobby.takeSeat
+import com.poria.netnsd.profile.Profile
 import com.ppporia.nsdgames.App
 import com.ppporia.nsdgames.ui.room.RoomMessageItem
 import com.ppporia.nsdgames.ui.room.messagesOf
@@ -31,17 +34,17 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
- * 房间页的 ViewModel：**把服务端快照拍平成 UI 状态**，并把动作转给会话。
+ * 房间页的 ViewModel：**把几个频道的流拼起来、拍平成 UI 状态**，并把动作转给会话。
  *
- * - 连接不归它管：链路和房间频道在 `App.session.connection` 上，【这个页面退出不会断开连接】
+ * - 连接不归它管：链路和频道在 `App.session.connection` 上，【这个页面退出不会断开连接】
  *   （所以"房间 → 对局"换页时链路还活着，回大厅也就是退了对局页而已）；
- * - 拼装就在这儿做：`lobby` 的权威快照 + 链路状态 + 已经能画的图 → [RoomState] → [RoomUiState]，
- *   三个频道谁都不用认识对方；
- * - 动作只是一行转发（`room/RoomCommands.kt` 里的扩展函数），不返回结果——
- *   成功与否由服务端推回的新快照说了算；
- * - 快照里谁有头像而本机还没有，在 [init] 里统一按 id 去要（`requestImage` 自带去重）。
+ * - 拼装就在这儿做：`lobby` 的权威快照 + `profile` 的资料表 + 链路状态 + 已经能画的图，
+ *   四个频道谁都不用认识对方（**房间只给 id 和座位，名字头像来自 profile**）；
+ * - 动作只是一行转发（`lobby/LobbyCommands.kt` 里的扩展函数），不返回结果——
+ *   成功与否由服务器推回的新快照说了算；
+ * - 资料里谁有头像而本机还没有，在 [init] 里统一按 id 去要（`requestImage` 自带去重）。
  *
- * **客户端不存房间数据**：花名册 / 座位 / 设置 / 消息全部来自 `lobby.state.snapshot`。
+ * **客户端不存房间数据**：名册 / 座位 / 设置 / 消息全部来自 `lobby.state.snapshot`。
  */
 class RoomVM : ViewModel() {
 
@@ -50,19 +53,26 @@ class RoomVM : ViewModel() {
 
     private val connection = session.connection
 
-    private val source: StateFlow<RoomState> = if (connection == null) {
-        MutableStateFlow(RoomState())
+    private val source: StateFlow<RoomSource> = if (connection == null) {
+        MutableStateFlow(RoomSource.EMPTY)
     } else {
+        val start = RoomSource(
+            lobby = connection.initialState,
+            profiles = connection.profile.profiles.value,
+            link = connection.link.state.value,
+            images = connection.blob.available.value,
+        )
         combine(
             connection.lobby.state,
+            connection.profile.profiles,
             connection.link.state,
             connection.blob.available,
-        ) { room, link, blobs ->
-            room.mergedWith(link, blobs)
+        ) { lobby, profiles, link, images ->
+            RoomSource(lobby.mergedWith(link, images), profiles, link, images)
         }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = connection.initialState,
+            initialValue = start,
         )
     }
 
@@ -76,11 +86,14 @@ class RoomVM : ViewModel() {
 
     init {
         viewModelScope.launch {
-            source.collect { room -> room.snapshot?.let(::requestAvatars) }
+            source.collect { source ->
+                requestImages(source.profiles)
+                requestProfiles(source)
+            }
         }
     }
 
-    // ── 动作（都只是发命令，结果以服务端推回的快照为准）────────────────────
+    // ── 动作（都只是发命令，结果以服务器推回的快照为准）────────────────────
 
     fun say(text: String) {
         session.say(text)
@@ -92,7 +105,7 @@ class RoomVM : ViewModel() {
 
     /** 准备按钮：把"当前状态取反"作为请求发出去，真正生效以快照为准。 */
     fun toggleReady() {
-        session.setReady(!source.value.iAmReady)
+        session.setReady(!source.value.lobby.iAmReady)
     }
 
     fun start() {
@@ -126,63 +139,102 @@ class RoomVM : ViewModel() {
     /** 缓存里可用的头像文件；没有就返回 `null`——UI 先画占位，等 `images` 推一次再来取。 */
     fun blobFile(id: String): File? = session.imageFile(id)
 
-    // ── 状态拍平 ────────────────────────────────────────────────────────────
+    /**
+     * 资料里带了头像 id 的，本机还没有就去要。
+     *
+     * **谁是拥有者由资料说了算**（`Profile` 是按 id 存的，key 就是本人），
+     * 不再需要从房间快照里猜——头像晚到也不会卡住房间。
+     */
+    private fun requestImages(profiles: Map<String, Profile>) {
+        profiles.forEach { (ownerId, profile) ->
+            if (profile.avatarId.isNotEmpty()) {
+                session.requestImage(profile.avatarId, ownerId)
+            }
+        }
+    }
 
     /**
-     * 快照里有人有头像而本机还没有，就去要。**谁拥有这张图是房间快照说的**：
-     * `players[].avatar == id` 的那个人（两个人用同一张图时找第一个就够了——内容寻址）。
+     * 名册里还有谁没资料？按 id 去问。
+     *
+     * **对方可以不答**（不想公开就是不回，座位条上一直显示占位）——
+     * `ProfileChannel` 会记住"已经问过"，名册怎么变都不会变成请求风暴。
      */
-    private fun requestAvatars(snapshot: RoomSnapshot) {
-        snapshot.players.forEach { player ->
-            val id = player.avatar.ifEmpty { return@forEach }
-            val owner = snapshot.players.firstOrNull { it.avatar == id }?.id ?: return@forEach
-            session.requestImage(id, owner)
-        }
+    private fun requestProfiles(source: RoomSource) {
+        val roster = source.lobby.snapshot?.players?.map { it.id }.orEmpty()
+        session.connection?.profile?.sync(roster)
     }
 
-    private fun RoomState.toUiState(): RoomUiState {
-        val snapshot = snapshot
-        val game = snapshot?.let { GameCatalog.byId(it.gameId) }
-        return RoomUiState(
-            title = snapshot?.roomName.orEmpty(),
-            gameTitle = game?.title.orEmpty(),
-            gameKnown = game != null,
-            playerCount = snapshot?.players?.size ?: 0,
-            tableSize = snapshot?.tableSize ?: 0,
-            phase = phase,
-            note = note,
-            hostless = snapshot != null && snapshot.hostId.isEmpty(),
-            online = online,
-            host = iAmHost,
-            ready = iAmReady,
-            startHint = snapshot?.startHint.orEmpty(),
-            seats = snapshot?.seatModels(myId).orEmpty(),
-            messages = messagesOf(snapshot, myId),
-            myId = myId,
-            snapshot = snapshot,
-        )
-    }
+    // ── 拼装 ────────────────────────────────────────────────────────────────
 
-    /** 座位号 = 出手顺序；空位也占一个位子（`name = null`）。 */
-    private fun RoomSnapshot.seatModels(myId: String): List<SeatUi> =
-        (0 until tableSize).map { seat ->
-            val player = playerAt(seat)
-            SeatUi(
-                seat = seat,
-                name = player?.name,
-                tag = when {
-                    player == null -> SeatTag.NONE
-                    player.host -> SeatTag.HOST
-                    player.ready -> SeatTag.READY
-                    else -> SeatTag.WAITING
-                },
-                mine = player != null && player.id == myId,
-                avatarId = player?.avatar.orEmpty(),
+    /** 四个频道各取一份，UI 只吃这一份。 */
+    private data class RoomSource(
+        val lobby: LobbyState,
+        val profiles: Map<String, Profile>,
+        val link: TcpLink.LinkState,
+        val images: Set<String>,
+    ) {
+        fun toUiState(): RoomUiState {
+            val snapshot = lobby.snapshot
+            val game = snapshot?.let { GameCatalog.byId(it.gameId) }
+            return RoomUiState(
+                title = snapshot?.roomName.orEmpty(),
+                gameTitle = game?.title.orEmpty(),
+                gameKnown = game != null,
+                playerCount = snapshot?.players?.size ?: 0,
+                tableSize = snapshot?.tableSize ?: 0,
+                phase = lobby.phase,
+                note = lobby.note,
+                hostless = snapshot != null && snapshot.hostId.isEmpty(),
+                online = lobby.online,
+                host = lobby.iAmHost,
+                ready = lobby.iAmReady,
+                startHint = snapshot?.startHint.orEmpty(),
+                seats = snapshot?.seatModels(lobby.myId, profiles).orEmpty(),
+                messages = messagesOf(snapshot, profiles, lobby.myId),
+                myId = lobby.myId,
+                names = profiles.mapValues { (_, profile) -> profile.name.ifEmpty { UNKNOWN_NAME } },
+                snapshot = snapshot,
             )
         }
+
+        companion object {
+            val EMPTY = RoomSource(LobbyState(), emptyMap(), TcpLink.LinkState(), emptySet())
+        }
+    }
+
+    companion object {
+        /** 名册里有人、但资料还没到时的占位（不是空座，是"人在、资料在路上"）。 */
+        const val UNKNOWN_NAME = "…"
+    }
 }
 
-/** UI 要渲染的房间状态：由 [RoomVM] 从服务端快照拍平而来，客户端不自己攒。 */
+/** 座位号 = 出手顺序；空位也占一个位子。 */
+private fun LobbySnapshot.seatModels(
+    myId: String,
+    profiles: Map<String, Profile>,
+): List<SeatUi> = (0 until tableSize).map { seat ->
+    val player = playerAt(seat)
+    val profile = player?.let { profiles[it.id] }
+    SeatUi(
+        seat = seat,
+        occupied = player != null,
+        name = when {
+            player == null -> ""
+            profile == null || profile.name.isEmpty() -> RoomVM.UNKNOWN_NAME
+            else -> profile.name
+        },
+        tag = when {
+            player == null -> SeatTag.NONE
+            isHost(player.id) -> SeatTag.HOST
+            isReady(player.id) -> SeatTag.READY
+            else -> SeatTag.WAITING
+        },
+        mine = player != null && player.id == myId,
+        avatarId = profile?.avatarId.orEmpty(),
+    )
+}
+
+/** UI 要渲染的房间状态：由 [RoomVM] 拼装 + 拍平而来，客户端不自己攒。 */
 data class RoomUiState(
     val title: String = "",
     val gameTitle: String = "",
@@ -203,17 +255,27 @@ data class RoomUiState(
     val seats: List<SeatUi> = emptyList(),
     val messages: List<RoomMessageItem> = emptyList(),
     val myId: String = "",
+    /** id → 昵称（座位面板要按 id 查名字，名字来自 profile 频道）。 */
+    val names: Map<String, String> = emptyMap(),
     /** 设置面板要用的原始快照（它就是数据本源，不再转一层）。 */
-    val snapshot: RoomSnapshot? = null,
+    val snapshot: LobbySnapshot? = null,
 ) {
     /** 收到过快照才能操作（按钮是否可用）。 */
     val canAct: Boolean get() = online && snapshot != null
+
+    fun nameOf(id: String): String = names[id] ?: RoomVM.UNKNOWN_NAME
 }
 
-/** 座位条上的一格。[name] 为 `null` 表示空位。 */
+/**
+ * 座位条上的一格。
+ *
+ * [occupied] 和 [name] 是两件事：座位上有人（快照说的）和资料到没到（profile 频道说的）。
+ * 人在、资料还没到时 [name] 是 `…`，不是空位。
+ */
 data class SeatUi(
     val seat: Int,
-    val name: String?,
+    val occupied: Boolean,
+    val name: String,
     val tag: SeatTag,
     val mine: Boolean,
     val avatarId: String,

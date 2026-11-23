@@ -1,4 +1,4 @@
-package com.poria.netnsd.room
+package com.poria.netnsd.lobby
 
 import com.poria.netnsd.link.Frame
 import com.poria.netnsd.link.LinkCodec
@@ -15,27 +15,32 @@ import kotlinx.serialization.json.encodeToJsonElement
  * 帧里没有"这是命令还是推送"的字段——方向由"从哪条连接收到"决定：
  *
  * ```
- * 客户端 → 房主   Frame(ns="lobby", p={"type":"say","text":"开一局？"})
- * 房主 → 所有人   Frame(ns="lobby", p={"type":"snap","room":{…}})          ← 广播
- * 房主 → 某个玩家 Frame(ns="lobby", from="<房主>", p={"type":"rejected","reason":"…"})
+ * 客户端 → 服务器   Frame(ns="lobby", p={"type":"say","text":"开一局？"})
+ * 服务器 → 所有人   Frame(ns="lobby", p={"type":"snap","lobby":{…}})        ← 广播
+ * 服务器 → 某个人   Frame(ns="lobby", from="<服务器>", p={"type":"rejected","reason":"…"})
  * ```
  *
- * 快照整份推给所有人（含发起者），客户端不做本地推演；超长时从**最老的聊天**开始丢，
- * 人和设置一条不少。
+ * ## 这个频道只认"身份 + 座位 + 聊天"，**不认名字和头像**
+ *
+ * 名字/头像属于**个人资料**，走 [com.poria.netnsd.profile.ProfileChannel]：
+ * 它们不影响任何权威判断（座位、发言、房主权限全都只认 `playerId`）。
+ * 分开的好处是资料可以晚到、可以随时更新，不用等一份新快照。
  */
 object LobbyProtocol {
 
     /** 频道名：`TcpLink.register(LobbyChannel(...))` 用。 */
     const val NS = "lobby"
 
-    /** 房间快照/命令的格式版本；加了不兼容的字段要动它。 */
-    const val VERSION = 1
+    /**
+     * 房间快照/命令的格式版本。
+     *
+     * v2：`players` 只剩 `id + seat`，`ready` 挪到 `readyIds`，`join` 不再带昵称。
+     */
+    const val VERSION = 2
 
-    const val MAX_NAME = 12
     const val MAX_TEXT = 300
     const val MAX_ROOM = 24
     const val MAX_ID = 32
-    const val MAX_AVATAR = 64
     private const val MAX_REASON = 80
 
     /** 快照目标字节数：链路一行有 8KB 上限，留点余量。 */
@@ -43,14 +48,15 @@ object LobbyProtocol {
 
     private val json get() = LinkCodec.json
 
-    // ── 命令（客户端 → 房主）────────────────────────────────────────────────
+    // ── 命令（客户端 → 服务器）──────────────────────────────────────────────
 
     @Serializable
     sealed interface Command {
 
+        /** 进房。**只报到，不带资料**：名字和头像由 `profile` 频道负责。 */
         @Serializable
         @SerialName("join")
-        data class Join(val name: String) : Command
+        data object Join : Command
 
         @Serializable
         @SerialName("say")
@@ -84,17 +90,12 @@ object LobbyProtocol {
         @SerialName("kick")
         data class Kick(val playerId: String) : Command
 
-        /** 报上自己的头像 id（图片本体在 `BlobChannel` 里，谁要谁去拉）。 */
-        @Serializable
-        @SerialName("avatar")
-        data class SetAvatar(val avatarId: String) : Command
-
         @Serializable
         @SerialName("start")
         data object Start : Command
     }
 
-    // ── 事件（房主 → 客户端）────────────────────────────────────────────────
+    // ── 事件（服务器 → 客户端）──────────────────────────────────────────────
 
     @Serializable
     sealed interface Event {
@@ -102,7 +103,7 @@ object LobbyProtocol {
         /** 整份权威快照。 */
         @Serializable
         @SerialName("snap")
-        data class Snapshot(val room: RoomSnapshot) : Event
+        data class Snapshot(val lobby: LobbySnapshot) : Event
 
         /** 刚才那条命令没生效，给人看的原因。 */
         @Serializable
@@ -132,7 +133,7 @@ object LobbyProtocol {
      *
      * 超过 [MAX_SNAPSHOT_BYTES] 时从**最老的聊天**开始丢：座位/设置/人永远是完整的。
      */
-    fun encodeSnapshot(snapshot: RoomSnapshot): JsonElement {
+    fun encodeSnapshot(snapshot: LobbySnapshot): JsonElement {
         var messages = snapshot.messages
         while (true) {
             val payload = encode(Event.Snapshot(snapshot.copy(messages = messages)))

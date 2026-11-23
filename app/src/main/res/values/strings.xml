@@ -38,6 +38,7 @@
     <string name="room_seat_no">%1$d 号位</string>
     <string name="room_seat_avatar">玩家头像</string>
     <string name="room_seat_empty">空位</string>
+    <string name="room_seat_unknown">资料还没到</string>
     <string name="room_seat_host">房主</string>
     <string name="room_seat_ready">已准备</string>
     <string name="room_seat_waiting">等准备</string>

@@ -9,7 +9,7 @@ import androidx.core.view.isVisible
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.poria.core.game.GameCatalog
 import com.poria.core.game.GameInfo
-import com.poria.netnsd.room.RoomSnapshot
+import com.poria.netnsd.lobby.LobbySnapshot
 import com.ppporia.nsdgames.R
 import com.ppporia.nsdgames.databinding.ItemOptionSwitchBinding
 import com.ppporia.nsdgames.databinding.SheetRoomSettingsBinding
@@ -42,7 +42,7 @@ class RoomSettingsSheet(private val context: Context) {
         dialog.setOnDismissListener { isShowing = false }
     }
 
-    fun show(snapshot: RoomSnapshot?, isHost: Boolean, online: Boolean) {
+    fun show(snapshot: LobbySnapshot?, isHost: Boolean, online: Boolean) {
         isShowing = true
         render(snapshot, isHost, online)
         dialog.show()
@@ -53,7 +53,7 @@ class RoomSettingsSheet(private val context: Context) {
         if (dialog.isShowing) dialog.dismiss()
     }
 
-    fun render(snapshot: RoomSnapshot?, isHost: Boolean, online: Boolean) {
+    fun render(snapshot: LobbySnapshot?, isHost: Boolean, online: Boolean) {
         if (!isShowing) return
 
         binding.textSettingsHint.text = context.getString(
@@ -125,7 +125,7 @@ class RoomSettingsSheet(private val context: Context) {
         }
     }
 
-    private fun syncOptions(game: GameInfo, snapshot: RoomSnapshot, editable: Boolean) {
+    private fun syncOptions(game: GameInfo, snapshot: LobbySnapshot, editable: Boolean) {
         val signature = game.id + "|" + game.options.joinToString(",") { it.id }
         if (binding.containerOptions.tag != signature) {
             binding.containerOptions.removeAllViews()
