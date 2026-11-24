@@ -2,6 +2,7 @@ package com.ppporia.nsdgames.ui.room
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.content.Intent
 import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.core.view.WindowInsetsCompat
@@ -13,10 +14,13 @@ import com.poria.netnsd.lobby.SessionPhase
 import com.ppporia.nsdgames.App
 import com.ppporia.nsdgames.R
 import com.ppporia.nsdgames.databinding.ActivityRoomBinding
+import com.ppporia.nsdgames.ui.azul.AzulGameActivity
 import com.ppporia.nsdgames.viewmodel.room.RoomUiState
 import com.ppporia.nsdgames.viewmodel.room.RoomVM
 import com.ppporia.nsdgames.viewmodel.room.SeatTag
 import java.io.File
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 
 /**
  * 游戏准备房间页，**纯 View 层**：
@@ -95,7 +99,16 @@ class RoomActivity : BaseActivity<ActivityRoomBinding>() {
     }
 
     override suspend fun bindUi() {
-        vm.state.collect { render(it) }
+        coroutineScope {
+            // 房主按了开始（大厅切进对局阶段）→ 各端都跳到对局页
+            launch { vm.startGame.collect { openGame() } }
+            vm.state.collect { render(it) }
+        }
+    }
+
+    /** 房间页留在返回栈里：从对局页退回来就是"回大厅"。 */
+    private fun openGame() {
+        startActivity(Intent(this, AzulGameActivity::class.java))
     }
 
     /**

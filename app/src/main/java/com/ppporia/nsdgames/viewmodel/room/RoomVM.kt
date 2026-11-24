@@ -7,6 +7,7 @@ import com.poria.netnsd.Session
 import com.poria.netnsd.blob.imageFile
 import com.poria.netnsd.blob.requestImage
 import com.poria.netnsd.link.TcpLink
+import com.poria.netnsd.lobby.LobbyPhase
 import com.poria.netnsd.lobby.LobbySnapshot
 import com.poria.netnsd.lobby.LobbyState
 import com.poria.netnsd.lobby.SessionPhase
@@ -25,7 +26,9 @@ import com.ppporia.nsdgames.App
 import com.ppporia.nsdgames.ui.room.RoomMessageItem
 import com.ppporia.nsdgames.ui.room.messagesOf
 import java.io.File
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -84,11 +87,27 @@ class RoomVM : ViewModel() {
             initialValue = source.value.toUiState(),
         )
 
+    /**
+     * 房主按了开始、大厅切进对局阶段时发一次：Activity 收到就去开对局页。
+     *
+     * 用一次性事件而不是"状态里放个开关"：否则从对局页退回来时大厅状态还是 `Playing`，
+     * 会立刻又被弹回对局页。
+     */
+    private val _startGame = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val startGame: SharedFlow<Unit> = _startGame
+
     init {
         viewModelScope.launch {
+            var lastPhase = source.value.lobby.snapshot?.phase ?: LobbyPhase.Lobby
             source.collect { source ->
                 requestImages(source.profiles)
                 requestProfiles(source)
+
+                val phase = source.lobby.snapshot?.phase ?: LobbyPhase.Lobby
+                if (phase == LobbyPhase.Playing && lastPhase != LobbyPhase.Playing) {
+                    _startGame.tryEmit(Unit)
+                }
+                lastPhase = phase
             }
         }
     }
@@ -198,6 +217,7 @@ class RoomVM : ViewModel() {
             host = lobby.iAmHost,
             ready = lobby.iAmReady,
             startHint = snapshot?.startHint.orEmpty(),
+            lobbyPhase = snapshot?.phase ?: LobbyPhase.Lobby,
             seats = snapshot?.seatModels(lobby.myId, profiles).orEmpty(),
             messages = messagesOf(snapshot, profiles, lobby.myId),
             myId = lobby.myId,
@@ -256,6 +276,8 @@ data class RoomUiState(
     val ready: Boolean = false,
     /** 服务端算的"还不能开局"的原因；空串 = 能开。 */
     val startHint: String = "",
+    /** 大厅处在哪个阶段；切到 `Playing` 之后这里的所有操作都会被服务器拒。 */
+    val lobbyPhase: LobbyPhase = LobbyPhase.Lobby,
     val seats: List<SeatUi> = emptyList(),
     val messages: List<RoomMessageItem> = emptyList(),
     val myId: String = "",
@@ -264,8 +286,8 @@ data class RoomUiState(
     /** 设置面板要用的原始快照（它就是数据本源，不再转一层）。 */
     val snapshot: LobbySnapshot? = null,
 ) {
-    /** 收到过快照才能操作（按钮是否可用）。 */
-    val canAct: Boolean get() = online && snapshot != null
+    /** 收到过快照、而且还在大厅阶段才能操作（按钮是否可用）。 */
+    val canAct: Boolean get() = online && snapshot != null && lobbyPhase == LobbyPhase.Lobby
 
     fun nameOf(id: String): String = names[id] ?: RoomVM.UNKNOWN_NAME
 }

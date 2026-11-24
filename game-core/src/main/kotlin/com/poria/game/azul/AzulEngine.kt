@@ -77,7 +77,7 @@ class AzulEngine {
     }
 
     fun startGame(seqPlayers: List<String>) = _state.update { old ->
-        check(old.phase != AzulPhase.Preparing) { "必须在准备阶段后才能开始游戏" }
+        check(old.phase == AzulPhase.Preparing) { "必须在准备阶段后才能开始游戏" }
         check(old.desktop.players.sorted() == seqPlayers.sorted()) { "和准备时的玩家不匹配" }
         this.seqPlayer = seqPlayers
         val (desktop, rt) = old.desktop.placePlates(

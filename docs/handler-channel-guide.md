@@ -295,7 +295,7 @@ class AzulChannel(
 
 要点：
 
-- 上面代码里的 `Round`（规则引擎）、`AzulState` / `Phase`（UI 侧状态）是**示意类型**，
+- 上面代码里的 `Round`（规则引擎）、`AzulState` / `Phase`（UI 侧状态）是**示意类型**（真实的在 `:game-core/azul`），
   照着自己的业务起名即可；对应房间那一套就是 `Lobby` 和 `LobbyState`/`SessionPhase`。
 - **服务端半边只改规则、只推快照**，从不写 `_state`；**客户端半边只写 `_state`**。
   这样"谁是权威"在代码结构上就一眼看得出来，不会出现两份真相。
@@ -303,50 +303,66 @@ class AzulChannel(
   `AzulChannel` 负责"该发给谁"。这条线越了就会出现"客户端和服务端各有一套判定"的经典 bug。
 - `synchronized(lock)` 包住"改状态 → 编码 → 发"三步：只包规则会让两份快照乱序到达。
 - 拒绝只回给**发命令的那个人**（`sendTo`），不要广播。
-- 只推给对局内的成员（`broadcastEach` + 成员判断），链路里报到过但没进对局的人不该看到局面。
+- 只推给该看到的人：`broadcast`（全员一样）或 `broadcastEach`（一人一份）。花砖没有隐藏信息，所以整份广播；有手牌的游戏用后者。
 
-### 4.1 页面侧：注册与注销
+### 4.1 频道的归属：会话级，不是页面级
 
-频道类住在 `:app-net`（协议和规则都在那边），页面只做两件事：
+**先分清两件事**，混起来就会写出"页面一退，全桌的牌桌没了"：
+
+| 事情 | 谁负责 | 怎么做 |
+|---|---|---|
+| **路由**：`ns` 的帧交给谁 | `TcpLink` 的注册表 | `link.register(channel)`，一个 `ns` 一个 Handler |
+| **生命周期**：谁创建、谁销毁 | `Session`（会话级） | 必有的频道放 `Connection`；按需开的放 `Session` 的**槽位** |
+
+游戏频道的生命周期**必须跟着连接**，不能跟着页面：房主那台机器上的**引擎**就挂在频道实例上，
+页面一退出就 `unregister` 等于把牌桌砸了（别人还停在最后一帧）。
+
+#### 4.1.1 槽位：Session 不涨，频道自己管开关
+
+`Session` 里**只有一张 `internal` 的槽位表**，没有一行和具体游戏有关：
 
 ```kotlin
-class AzulVM : ViewModel() {
+// Session.kt
+private val slots = HashMap<SlotKey<*>, Any>()
+@Suppress("UNCHECKED_CAST")
+internal fun <T : Any> slot(key: SlotKey<T>): T? = slots[key] as T?   // 唯一的强转，且不可能失败
+internal fun <T : Any> setSlot(key: SlotKey<T>, value: T?) { … }
+```
 
-    private val session = App.session
-    private val link = session.connection?.link
-    private val channel = AzulChannel(round = null) // 纯客户端没有权威；服务器侧传引擎
+开关逻辑写在**频道自己的文件夹**里（真实实现见 `azul/AzulSession.kt`，54 行）：
 
-    /** 链路状态（没连上时用一份空的，UI 不用判空）。 */
-    private val linkState = link?.state ?: MutableStateFlow(TcpLink.LinkState())
+```kotlin
+internal object AzulSlot : SlotKey<AzulChannel>()          // 类型化 key：拼不错，也放不错类型
 
-    /** 拼装层：频道状态 + 链路状态 + 能画的图，和 RoomVM 一样的写法。 */
-    val state: StateFlow<AzulUiState> = combine(
-        channel.state,
-        linkState,
-        session.images,
-    ) { azul, linkNow, images -> azul.toUi(linkNow, images) }
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = channel.state.value.toUi(linkState.value, session.images.value),
-        )
+val Session.azul: AzulChannel? get() = slot(AzulSlot)      // 页面读的就是这个
 
-    init {
-        check(link?.register(channel) == true) { "${AzulProtocol.NS} 频道已被占用" }
-    }
+fun Session.ensureAzul(): AzulChannel? { … setSlot(AzulSlot, channel) … }   // 幂等
+fun Session.closeAzul() { … setSlot(AzulSlot, null) … }
+```
 
-    override fun onCleared() {
-        // 只注销自己：链路是进程的，退了页面还要回大厅
-        link?.unregister(AzulProtocol.NS)
-    }
+三个好处：
 
-    fun place(row: Int, factory: Int, color: Int) = session.place(row, factory, color)
+- **加一款游戏 = 加一个文件**：`Session.kt` 一行不用改，也不会长成"二十个 open/close"；
+- **调用方不用 `as?`**：`slot(AzulSlot)` 的返回类型来自 key 的类型参数，`setSlot` 也只收 `T`；
+  而 `slot()` / `setSlot()` 是 `internal`，`:app` 根本摸不到；
+- **key 是单例对象，不是字符串**：拼错不可能，两个频道也不会撞键。
+
+页面那一侧不变：
+
+```kotlin
+class AzulGameVM : ViewModel() {
+    private val channel: AzulChannel? = App.session.ensureAzul()   // 幂等，重进页面拿同一个
+    val state: StateFlow<AzulUiState> = …
+    override fun onCleared() { /* 什么都不关：频道和链路都是会话的 */ }
 }
 ```
 
-- `register` 返回 `false` 只有两种原因：`ns` 被占了，或者用了保留的 `_link`。
-- 如果这个频道是在链路建好之后才注册的，`onLinked` 会立刻补一次（不用自己去问"我是谁"）。
-- **`onCleared` 里绝不 `close` 链路**（也确实调不到：`close` 是 `internal`）。
+- 真正回收只有两处：回首页（`session.leave()` 清空槽位 + 关链路）、显式"结束对局"（`closeAzul()`）；
+- **`onCleared` 里既不注销频道、也不关链路**（`close` 本来就是 `internal`，编译不过）。
+
+> 别把频道塞进 `HashMap<String, Any?>` 那种"服务定位器"：`as? T` 会扩散到每个调用点、
+> 字符串 key 会拼错、谁都往里面塞东西。槽位表是它的"安全版"——
+> **只在模块内部可见、键带类型、读写只能经过频道自己文件里的那两个函数**。
 
 ### 4.2 命令写成扩展函数
 
@@ -355,7 +371,7 @@ class AzulVM : ViewModel() {
 ```kotlin
 fun Session.place(row: Int, factory: Int, color: Int) = sendAzul(AzulProtocol.Command.Place(row, factory, color))
 
-fun Session.nextRound() = sendAzul(AzulProtocol.Command.Next)
+fun Session.takeFromRedundant(row: Int, tile: Tile) = sendAzul(AzulProtocol.Command.TakeFromRedundant(row, tile))
 
 private fun Session.sendAzul(command: AzulProtocol.Command) {
     val link = connection?.link ?: return

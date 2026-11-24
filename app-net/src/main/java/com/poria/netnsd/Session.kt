@@ -56,13 +56,28 @@ class Connection internal constructor(
  * 页面之间**不传递链路**，谁需要谁从 `App.session.connection` 拿；一个页面走了只是它不再订阅。
  *
  * 为什么不是"什么都管"的会话：这里**只有**建/关和对资源的持有。
- * 命令发送在 `room/RoomCommands.kt`（扩展函数），状态拼装在 VM，图片进度在 `BlobChannel` 自己身上。
- * 页面级的频道（比如将来的 `azul`）由那个页面的 VM 自己 `link.register` / `unregister`，不经过这里。
+ * 命令发送在各频道的 `…Commands.kt`（扩展函数），状态拼装在 VM，图片进度在 `BlobChannel` 自己身上。
+ *
+ * ## 频道怎么归 Session 持有（而不把 Session 写成杂物间）
+ *
+ * - **每条连接必有的**（`link` / `blob` / `profile` / `lobby`）→ 放在 [Connection] 里，
+ *   建连接时一起造、一起死；
+ * - **按需开的**（对局频道，将来每款游戏一个）→ 放进 [Session] 的**槽位表**：
+ *   存储在这一个文件里，而"怎么开、怎么关"写在**频道自己的文件夹**里
+ *   （比如 `azul/AzulSession.kt` 的 `Session.ensureAzul()` / `closeAzul()`），
+ *   于是加一个频道 = 加一个文件，`Session.kt` 一行都不用改。
+ *
+ * 槽位用**带类型的 key**（[SlotKey]），所以取回来不需要 `as?`：
+ *
+ * ```kotlin
+ * internal object AzulSlot : SlotKey<AzulChannel>()          // 频道自己文件夹里
+ * val Session.azul: AzulChannel? get() = slot(AzulSlot)      // 类型自动是 AzulChannel?
+ * ```
  *
  * **生命周期约定**（很关键，别绕过）：
- * - 连接只在 [host] / [join] 里建，且每次都是全新的一套 `TcpLink` + `BlobChannel` + `LobbyChannel`
+ * - 连接只在 [host] / [join] 里建，且每次都是全新的一套 `TcpLink` + 频道
  *   （链路关掉就不能再用，见 `TcpLink.close`）；
- * - [leave] 是唯一收摊入口，自己切主线程（NsdManager 要 Looper），重复调用安全；
+ * - [leave] 是唯一收摊入口：清空槽位、关链路，自己切主线程（NsdManager 要 Looper），重复调用安全；
  * - 首页（`RoomsActivity`）每次可见都会调 [leave]，所以"在首页 = 没有连接"是一条硬约束，
  *   异常退出 / 进程重建的残留都会被它兜住。
  *
@@ -73,7 +88,8 @@ class Connection internal constructor(
  * | `Session(context)` | 构造器 `private`——只能 [getInstance] |
  * | `TcpLink(...)` | `TcpLink` 的构造器是 `internal`（只有 `:app-net` 能造） |
  * | `link.host/join/close` | 同样是 `internal`——页面拿得到链路，但启动不了、关不掉 |
- * | `BlobChannel(...)` / `LobbyChannel(...)` / `BlobStore(...)` / `Room(...)` | 构造器 `internal`——页面**新建不了**频道 |
+ * | 各频道的构造器 | `internal`——页面**新建不了**频道 |
+ * | `slot(key)` / `setSlot(...)` | `internal`——`:app` 看不到，只能读类型化的扩展属性 |
  *
  * 也就是说 `:app` 里的代码只能"读状态 + 调本文件/扩展函数的公开方法"；
  * 要开连接、要收摊，除了 [host] / [join] / [leave] 没别的口子。
@@ -86,6 +102,31 @@ class Session private constructor(context: Context) {
     @Volatile
     var connection: Connection? = null
         private set
+
+    /**
+     * 按需开的频道（对局频道、将来的其它游戏频道）都放这儿。
+     *
+     * 键是 [SlotKey] 单例（不是字符串）：拼不错，也不会和别的频道撞。
+     * 值统一按 `Any` 存，但唯一的取法 [slot] 由 key 的类型参数决定返回类型，
+     * 所以调用方拿到的永远是正确类型，不需要 `as?`。
+     */
+    private val slots = HashMap<SlotKey<*>, Any>()
+
+    /**
+     * 读一个槽位。**只有 `:app-net` 内部能用**，页面通过各频道文件夹里的扩展属性读。
+     *
+     * 这个 `as?` 是整个设计里唯一的一次强制转换，而且它不可能失败：
+     * key 自己就带着 `T`，而 [setSlot] 只接受 `T`，所以存进去的一定是 `T`。
+     */
+    @Suppress("UNCHECKED_CAST")
+    internal fun <T : Any> slot(key: SlotKey<T>): T? = slots[key] as T?
+
+    /** 写/清一个槽位（`null` = 清掉）。 */
+    internal fun <T : Any> setSlot(key: SlotKey<T>, value: T?) {
+        synchronized(slots) {
+            if (value == null) slots.remove(key) else slots[key] = value
+        }
+    }
 
     private var advertiser: ServiceAdvertiser? = null
 
@@ -161,6 +202,8 @@ class Session private constructor(context: Context) {
         advertiser = null
         val current = connection ?: return
         connection = null
+        // 按需开的频道（对局频道等）跟着连接一起死：链路一关注册表就空了，别留悬空引用
+        synchronized(slots) { slots.clear() }
         current.link.close("离开房间")
     }
 
@@ -216,3 +259,16 @@ class Session private constructor(context: Context) {
         }
     }
 }
+
+/**
+ * 槽位的"带类型的钥匙"：每个按需开的频道在自己文件夹里声明一个单例。
+ *
+ * ```kotlin
+ * internal object AzulSlot : SlotKey<AzulChannel>()
+ * ```
+ *
+ * 好处是**取的时候不用 `as?`**：`slot(AzulSlot)` 的返回类型由 key 的类型参数决定，
+ * 传错类型的值直接编译不过。槽位表本身只有 [Session] 能看到（`internal`），
+ * `:app` 只能读各频道暴露的类型化扩展属性（`session.azul`）。
+ */
+internal open class SlotKey<T : Any>

@@ -236,10 +236,10 @@ class Lobby internal constructor(roomName: String) {
     }
 
     /**
-     * 房主：开始游戏。校验顺序是"人数够 → 所有人都准备好"，都过了以后才轮到规则本身。
+     * 房主：开始游戏。校验顺序是"人数够 → 所有人都准备好"，都过了就把大厅切成 [LobbyPhase.Playing]。
      *
-     * 现在规则还没写（`GameInfo.available == false`），所以最后一步返回的是一句提示——
-     * **这里就是将来接对局的地方**：把 return 换成 `phase = LobbyPhase.Playing` + `bumpLocked()` 即可。
+     * 切阶段只是"告诉大家可以进对局页了"：真正的局面在 `azul` 频道里（引擎在 `:game-core`），
+     * 大厅这边从此锁定——换座/改设置/准备全部返回"游戏已经开始了"。
      */
     fun start(playerId: String): String? {
         synchronized(lock) {
@@ -249,7 +249,9 @@ class Lobby internal constructor(roomName: String) {
             val hint = startHintLocked()
             if (hint.isNotEmpty()) return hint
 
-            return "「${game.title}」的对局还在施工，先把人凑齐、座次排好"
+            phase = LobbyPhase.Playing
+            bumpLocked()
+            return null
         }
     }
 

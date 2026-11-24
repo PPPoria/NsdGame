@@ -37,7 +37,7 @@ data class AzulDesktop internal constructor(
             redundant = newRedundant,
             workspaces = workspaces + (player to workspace.add(
                 row, tile, quantity,
-                nextRoundFirstActPlayer == null
+                false
             ))
         )
     }
@@ -118,7 +118,7 @@ data class AzulWorkspace internal constructor(
         return copy(
             floor = newFloor,
             punishment = AzulPunishment(
-                punishmentTiles +
+                punishmentTiles + punishment.tiles +
                         if (isFirstAct) listOf(Tile.FirstAct)
                         else emptyList()
             )
@@ -271,6 +271,9 @@ data class AzulWall internal constructor(
         var colScore = 1
         for (i in row + 1..4) if (grid[i][col] != null) colScore++ else break
         for (i in row - 1 downTo 0) if (grid[i][col] != null) colScore++ else break
-        return rowScore + colScore
+        return if (rowScore == 1 && colScore == 1) 1
+        else if (rowScore > 1 && colScore > 1) rowScore + colScore
+        else if (rowScore == 1) colScore
+        else rowScore
     }
 }

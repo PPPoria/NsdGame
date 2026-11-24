@@ -161,7 +161,7 @@ class LobbyTest {
     }
 
     @Test
-    fun `房主按开始：人数不够、有人没准备、规则还没写`() {
+    fun `房主按开始：人数不够、有人没准备、都齐了就进对局阶段`() {
         val lobby = Lobby("测试房间")
         lobby.join("p1", host = true)
         assertEquals("只有房主能改设置", lobby.start("p2"))
@@ -171,7 +171,11 @@ class LobbyTest {
         assertEquals("还有 1 人没准备", lobby.start("p1"))
 
         lobby.setReady("p2", true)
-        assertEquals("规则还没写，只给一句提示", "「花砖物语」的对局还在施工，先把人凑齐、座次排好", lobby.start("p1"))
-        assertEquals("阶段还在大厅", LobbyPhase.Lobby, lobby.snapshot().phase)
+        assertEquals("都齐了，开始成功", null, lobby.start("p1"))
+        assertEquals("阶段切到对局", LobbyPhase.Playing, lobby.snapshot().phase)
+
+        assertEquals("开始之后再按就说已经开始了", "已经开始了", lobby.start("p1"))
+        assertEquals("对局中不能换座", "游戏已经开始了，不能换座", lobby.takeSeat("p1", 3))
+        assertEquals("对局中不能改设置", "游戏已经开始了", lobby.setTableSize("p1", 3))
     }
 }

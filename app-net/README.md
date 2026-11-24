@@ -59,7 +59,7 @@ guest-2 的 Handler 收到：onEvent(payload, from = "guest-1")
 | `profile` | 昵称、头像 id（`avatarId: String?`） | 报到时各自广播一次自己的资料；缺什么来问谁 |
 | `blob` | 图片本体（分块） | **谁有谁发**：缺图的一方 `sendTo(ownerId, "blob", {id})`，拥有者分块 `sendTo(requester, …)` 推回来；房主只转发、不存图。内容是 sha1 寻址的，接收方验过 hash 才用 |
 | `lobby` | 座位 / 设置 / 准备 / 开局 | 权威数据，走房主 |
-| `azul`… | 各游戏的对局状态 | 权威数据，走房主 |
+| `azul` | 花砖物语的对局局面 | 权威数据，走房主（整份广播：花砖没有隐藏信息） |
 
 这样 `TcpLink` 不需要认识任何一个业务：加频道 = 加一个 `TcpHandler`，链路一行不改。
 （想自己加一个频道？照着 **`../docs/handler-channel-guide.md`** 抄，那份是完整步骤。）
@@ -179,6 +179,35 @@ val error = session.join(foundHost, "小红", avatarBytes)
 - 权威归**本人**：`put` / `want` 里都没有 id，服务器用"谁发的"盖章，谁也改不了别人的资料；
 - 服务器**不存资料**，只做"把 `put` 变广播、把 `want` 转给本人"；
 - 头像只有 id，图片本体走 `blob`（见下面的图）。
+
+## 对局：`azul` 频道（规则在 `:game-core`）
+
+| 类 | 干什么 | 测得了吗 |
+|---|---|---|
+| `azul/AzulProtocol` | `azul` 频道的负载：命令（`sync` / `plate` / `redundant`）、事件（`snap` / `rejected`）。局面就是 `:game-core` 的 `AzulSnapshot`（它自己 `@Serializable`），不抄 DTO | ✅ JVM 单测 |
+| `azul/AzulChannel` | **一个 `TcpHandler` 两半**：服务器半边持有 `AzulEngine`（开局、走一步、推整份局面、引擎异常变拒绝）；客户端半边把局面收进 `AzulGameState` | ✅ 真 socket |
+| `azul/AzulCommands` | 对局动作（`Session.takeFromPlate / takeFromRedundant`）——**没有"下一轮"命令**，那是服务器引擎的节奏 | — |
+
+三条和 `lobby` 不一样的地方：
+
+1. **规则一行都不在这层**：全在 `:game-core` 的 `AzulEngine`；这里只判"是不是该你动"（引擎不认人）
+   和"该广播给谁"。引擎的 `check(...)` 抛异常 → `runCatching` 成一句 `rejected` 回给那个人。
+2. **局面整份广播**：花砖的所有人地板/墙/分数都是公开的，不需要 `broadcastEach`。
+3. **客户端只信服务器广播的局面**（落款 `from == null`）：带落款的是经中转来的，谁发的都不认——
+   否则别人可以伪造一份棋盘推给你。`rejected` 不带权威，谁发都收。
+
+对局频道**跟着连接活**（房主的引擎挂在上面），不在页面里注册/注销：
+
+```kotlin
+// azul/AzulSession.kt —— 加一款游戏就复制这个文件，Session.kt 一行都不用改
+internal object AzulSlot : SlotKey<AzulChannel>()      // 类型化 key（存在 Session 的槽位表里）
+val Session.azul: AzulChannel? get() = slot(AzulSlot)  // 页面读这个
+fun Session.ensureAzul(): AzulChannel?                 // 幂等：没开就开，开过拿同一个
+fun Session.closeAzul()                                // 只注销这个 ns，不动链路
+```
+
+`Session` 里只有一张 `internal` 的槽位表（`slot()` / `setSlot()`，`:app` 看不到），
+所以"加频道"不会把 `Session.kt` 写胖；读取也不需要 `as?`——返回类型由 key 的类型参数决定。
 
 ### 边界是 `internal`，不是文档
 

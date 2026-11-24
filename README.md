@@ -30,7 +30,7 @@ game-core/                游戏域内核：**有哪些游戏 + 每款游戏的�
     GameCatalog.kt        ★ 游戏目录：能开哪些游戏、几个人玩、有哪些自定义玩法（加游戏只改这里）
     azul/                 （对局规则引擎；状态可以直接 `@Serializable`，编码仍在 `:app-net`）
 
-app-net/                  局域网层：发现（NSD）+ 链路（路由）+ 频道（大厅 / 资料 / 图片 / 会话）
+app-net/                  局域网层：发现（NSD）+ 链路（路由）+ 频道（大厅 / 资料 / 图片 / 对局）
   src/main/java/com/poria/netnsd/
     Nsd.kt                服务类型串 + FoundHost
     ServiceAdvertiser.kt  广播"我开了房间"+ TCP 端口
@@ -50,8 +50,11 @@ app-net/                  局域网层：发现（NSD）+ 链路（路由）+ �
     lobby/LobbyState.kt   UI 要渲染的东西：本机连接状态 + 服务器快照（`LobbySnapshot`：id + 座位）
     profile/ProfileFrames.kt  `profile` 频道的负载 + `Profile`（昵称 / 签名 / 头像 id）
     profile/ProfileChannel.kt ★ `profile` 频道：资料推（put→广播）+ 拉（want→本人回答），服务器只中转
-  Session.kt              ★ 进程级连接持有者：唯一的那条 `TcpLink` + blob/profile/lobby 三个频道 + NSD 广播
-  src/test/java/com/poria/netnsd/   帧路由/中转/心跳 + 图片/大厅/资料频道 + 大厅规则（真 socket，JVM 直接跑）
+    azul/AzulProtocol.kt   `azul` 频道负载：命令（sync/plate/redundant）+ 事件（snap/rejected）
+    azul/AzulChannel.kt    ★ `azul` 频道：服务器半边（引擎走一步→推局面）+ 客户端半边（局面→AzulGameState）
+    azul/AzulCommands.kt   对局动作（`Session.takeFromPlate/…`）
+  Session.kt              ★ 进程级连接持有者：唯一那条 `TcpLink` + blob/profile/lobby 频道 + 对局频道（`ensureAzul`）+ NSD 广播
+  src/test/java/com/poria/netnsd/   帧路由/中转/心跳 + 图片/大厅/资料/对局频道（真 socket，JVM 直接跑）
   （详见 app-net/README.md）
 
 base/                     Android 基础设施（可复用的，跟游戏无关）
@@ -69,10 +72,12 @@ app/                      唯一的应用模块：UI + MVI 的 ViewModel
     ui/room/MessageAdapter.kt    聊天列表（自己的靠右、别人的靠左带昵称）
     ui/room/RoomSettingsSheet.kt 底部弹出的房间设置（选游戏 / 牌桌人数 / 玩法开关）
     ui/room/SeatSheet.kt         点座位弹出的动作面板（入座 / 换座 / 请人离开）
+    ui/azul/AzulGameActivity.kt  对局页（**还是空壳**：布局和画盘子的活没写）
     ui/Avatars.kt                头像处理：居中裁正方形 + 缩到 ≤512px + WebP
     viewmodel/rooms/RoomsVM.kt   ★ 首页的 MVI ViewModel：建连接、昵称防抖落盘、房间列表、头像编码
     viewmodel/room/RoomVM.kt     ★ 房间的 MVI ViewModel：拼 lobby/profile/link/blob 四条流 → RoomUiState
-    profile/ProfileStore.kt      昵称/头像的 DataStore 读写
+    viewmodel/azul/AzulGameVM.kt ★ 对局的 MVI ViewModel：`session.ensureAzul()` + 拼成 AzulGameUiState
+    profile/ProfileStore.kt      昵称/签名/头像的 DataStore 读写
 ```
 
 依赖方向：`:app` → `:base` → `:core`，`:app` → `:app-net` → `:core`，
@@ -240,25 +245,28 @@ link.join(ip, port)
 - **游戏目录在 `:game-core` 的 `GameCatalog`**：加一款游戏 = 加一条 `GameInfo`（人数范围 + 玩法开关
   的默认值）。首页的"今天能开"、设置面板的"选游戏 / 选人数 / 玩法开关"都照着它渲染，不用改 UI 代码。
 
-## 下一步：把对局接进来
+## 对局（`azul` 频道）：已经接上了，只差画面
 
-`START` 现在会过完"人数够、都准备好了"的校验，然后返回一句
-「花砖物语的对局还在施工」。接游戏的步骤在 `docs/room-reference.md` 第 7 节，一句话版：
+- `Lobby.start()` 校验通过就把大厅切进 `LobbyPhase.Playing`；
+- 各端看到阶段变了 → `RoomActivity` 开 `AzulGameActivity`（房间页留在返回栈里 = 回大厅）；
+- 对局页的 `AzulGameVM` 调 `App.session.ensureAzul()`：**服务器（房主那台机器）带上引擎，
+  按大厅座次开局**，别的设备是纯客户端；频道由 `Session` 持有，**页面退出不会关它**
+  （房主的引擎就在里面），只有回首页 `session.leave()` 才收摊；
+- 规则全在 `:game-core/azul` 的 `AzulEngine`，`:app-net` 只做"谁的回合能发什么、该广播给谁"；
+  局面是 `AzulSnapshot`（自己就是 `@Serializable`），服务器整份广播——花砖没有隐藏信息；
+- **节奏也在服务器**：客户端只会发"拿砖"。拿完最后一块后服务器自己 `finishRound()`
+  → 停 1.5 秒让人看结算 → `nextRoundOrFinishGame()`。**没有"下一轮"这条命令**，
+  客户端连按钮都不用做。
 
-1. `Lobby.start()` 把 `return` 换成 `phase = LobbyPhase.Playing` + `bumpLocked()`；
-2. 新加一个频道（`AzulChannel`，`ns = "azul"` + `AzulProtocol` 的负载），对局页的 ViewModel
-   `link.register(...)` / `onCleared` 时 `unregister("azul")`；
-3. 对局页从 `App.session.connection` 拿链路（**不是**从房间页传过去），所以换页时
-   socket、身份、图片、资料都还活着，回大厅也就退了对局页而已。
-
-链路、大厅、资料、图片都不用动，发命令和推快照还是"命令 → 规则 → 快照"那一套。
+**还没做的**：`AzulGameActivity` 的布局和画盘子的逻辑（`activity_azul_game.xml` 还是空的），
+以及"一局打完 → 回大厅 → 再来一局"（现在大厅会一直停在 `Playing`）。
 
 ## 跑起来
 
 ```bash
 ./gradlew :core:test          # 行协议 + 真 socket 测试，几秒跑完，不需要模拟器
 ./gradlew :game-core:test     # 游戏目录/规则（同样是纯 JVM）
-./gradlew :app-net:test       # 各频道协议 + 快照裁剪 + 大厅规则 + 真 socket 收发（JVM 单测）
+./gradlew :app-net:test       # 各频道协议 + 快照裁剪 + 大厅/对局规则 + 真 socket 收发（JVM 单测）
 ./gradlew :app:assembleDebug  # 打包 APK
 ```
 
@@ -283,6 +291,10 @@ link.join(ip, port)
 | 首页长什么样 / 列表点了之后干什么 | `app/.../ui/rooms/RoomsActivity.kt`、`viewmodel/rooms/RoomsVM.kt` |
 | 房间页长什么样 / 座位条 / 设置面板 | `app/.../ui/room/RoomActivity.kt`、`SeatAdapter.kt`、`RoomSettingsSheet.kt`、`SeatSheet.kt` |
 | 房间状态怎么拼装、拍平成 UI 状态 | `app/.../viewmodel/room/RoomVM.kt`（`RoomUiState`） |
+| 对局协议（加一条命令 / 局面加字段） | `app-net/.../azul/AzulProtocol.kt` + `game-core/.../azul/` |
+| 对局规则（这步合不合法、分数怎么算） | `game-core/.../azul/AzulEngine.kt`、`AzulDesktop.kt` |
+| 对局页状态怎么拼装 | `app/.../viewmodel/azul/AzulGameVM.kt`（`AzulGameUiState`） |
+| 对局页长什么样 | `app/.../ui/azul/AzulGameActivity.kt`（**还是空壳**） |
 | 新页面要加一套协议 | 照 `docs/handler-channel-guide.md` 抄 |
 | 圆角 / 间距 / 字号 | `base/res/values/dimens.xml`（**别在 app 里写魔法值**） |
 
@@ -324,10 +336,16 @@ link.join(ip, port)
 9. **图片不进快照**：快照里只放 id，字节走 `blob` 分块；一块 ≤3KB（base64 后 ~4.2KB），
    别把 8KB 行上限当"传输容量"用——分块才是不堵别人的关键。
 10. **连接归进程，不归页面**：`TcpLink` 只由 `Session`（`App.session`，进程单例）创建和关闭，
-    页面/VM 一律"用而不持有"；页面自己的频道（比如将来的对局频道）由那个 VM
-    `register` / `unregister`，但**不许关链路**。收摊只有一个入口：回到首页。
-    这一条**不靠自觉**：`Session` 的构造器是 `private`、`TcpLink` 的构造器和
-    `host/join/close` 都是 `internal`，`:app` 里写 `TcpLink()` 或 `link.close()` 直接编译不过。
+    页面/VM 一律"用而不持有"。**频道也归 `Session`**：
+    - 每条连接必有的（`link` / `blob` / `profile` / `lobby`）放在 `Connection` 里，建连时一起造；
+    - 按需开的（对局频道、将来每款游戏一个）放进 `Session` 的**槽位表**，
+      而"怎么开/怎么关"写在**频道自己的文件夹**里（`azul/AzulSession.kt`）——
+      加一个频道 = 加一个文件，`Session.kt` 一行都不用改。
+    槽位用 `SlotKey<T>` 单例当键，所以取回来不需要 `as?`；`slot()` / `setSlot()` 是 `internal`，
+    `:app` 只能读 `session.azul` 这种类型化扩展属性。收摊只有一个入口：回首页 `session.leave()`
+    （清空槽位 + 关链路）。**不靠自觉**：`Session` 构造器 `private`、`TcpLink` 的
+    `host/join/close` 和各频道构造器都是 `internal`，`:app` 里写 `TcpLink()` / `link.close()` /
+    `AzulChannel(...)` 直接编译不过。
 11. **房间的权威范围要小**：`lobby` 只认"身份 / 座位 / 聊天 / 房间设置"。
     昵称、头像、签名这类**不影响判定**的东西一律另开频道（现在就是 `profile`），
     别塞进快照——塞进去的话"资料晚到"就会变成"房间状态卡住"。判据很简单：
@@ -365,7 +383,8 @@ link.join(ip, port)
 - 转屏靠 `android:configChanges` 不重开（订阅不重来；连接在 `App.session` 上，本来也不跟页面走）。
 - 联网：只有"行协议 + socket + 房主回环 + NSD 发现 + 房间快照"这几块，
   **断线重连、离线消息、房主权威转移都没写**；房主退出 = 房间解散。
-- 对局规则还没写：`START` 只做校验然后给一句提示（`GameInfo.available = false`）。
+- 对局：规则引擎（`:game-core/azul`）+ 频道（`:app-net/azul`）+ VM 都有了，JVM 上有真 socket 用例；
+  **但 `AzulGameActivity` 还是空壳**，没有棋盘画面，也没做"一局结束 → 回大厅 → 再来一局"。
 - 进程被杀后再回到房间页：`App.session` 里没有连接了，页面提示一句就退出（不自动重连）。
 
 ## 版本管理约定
