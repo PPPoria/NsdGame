@@ -25,10 +25,10 @@ core/                     纯 Kotlin 内核：一行一条消息怎么收怎么�
   src/main/kotlin/com/poria/core/        时间 / 颜色 / 哈希这类纯工具
   src/test/kotlin/com/poria/             行协议 + 真 socket 测试（JVM 上秒跑）
 
-game-core/                游戏域内核：**有哪些游戏 + 每款游戏的规则**。纯叶子模块（谁的依赖都不加）
+game-core/                游戏域内核：**有哪些游戏 + 每款游戏的规则**。纯 Kotlin（不碰 Android / 不碰 socket）
   src/main/kotlin/com/poria/game/
     GameCatalog.kt        ★ 游戏目录：能开哪些游戏、几个人玩、有哪些自定义玩法（加游戏只改这里）
-    （将来的 AzulEngine 等规则引擎也住这里）
+    azul/                 （对局规则引擎；状态可以直接 `@Serializable`，编码仍在 `:app-net`）
 
 app-net/                  局域网层：发现（NSD）+ 链路（路由）+ 频道（大厅 / 资料 / 图片 / 会话）
   src/main/java/com/poria/netnsd/
@@ -295,13 +295,20 @@ link.join(ip, port)
    - **依赖不同**：`:core` 不碰 Android（所以 `:core:test` 秒跑），`:app-net` 必须碰 Android（`NsdManager`），
      `:base` 是界面基建；
    - **变化速率不同**：`:core`（通信）已经稳定、几乎不改；`:game-core`（有哪些游戏 + 规则）随每加一款
-     游戏长大。它俩都是"纯 Kotlin + 零依赖"，靠变化速率分而不是靠依赖分——所以 `:game-core`
-    **必须是纯叶子模块**（谁的依赖都不加），这样拆出来零成本、也不会造成循环。
+     游戏长大。它俩都不碰 Android，靠变化速率分而不是靠依赖分。`:game-core` 只允许依赖
+     `kotlinx-coroutines-core` + `kotlinx-serialization-core` 两个**纯 Kotlin 库**，
+     **不许依赖任何其它模块**（这样拆出来零成本、也不会造成循环）。
     说不清属于哪一条就别拆。
 2. **依赖只许这几样**：AndroidX 基础库、Material、kotlinx-coroutines，外加**唯一一个例外**
-   `kotlinx-serialization-json`（只给 `:app-net` 的频道协议用：快照/命令都是 `@Serializable`
-   数据类）。socket 用 JDK 自带的 `java.net`，网络发现用系统的 `android.net.nsd`，
-   除此之外不引库；`:core` 和 `:game-core` 仍然零依赖。
+   `kotlinx-serialization`（`@Serializable` 数据类直接上线，不手写拼装与转义）。
+   socket 用 JDK 自带的 `java.net`，网络发现用系统的 `android.net.nsd`，除此之外不引库。
+   按模块落地：
+   - `:core`：零依赖（连协程都没有，见下面"联网分三层"）；
+   - `:base`：AndroidX + `kotlinx-coroutines-android`；
+   - `:game-core`：`kotlinx-coroutines-core`（**纯 Kotlin，不是 Android 那个 artifact**）+
+     `kotlinx-serialization-core`（只打注解，**不引 json**，也不能用 `Dispatchers.Main`）；
+   - `:app-net`：`kotlinx-coroutines-android` + `kotlinx-serialization-json`（全局唯一的 Json 实例在这）；
+   - `:app`：AndroidX + Material，**自己不引协程/序列化**（都从下面带上来）。
 3. 禁止 Hilt / Koin / Dagger、RxJava、EventBus、Room、Navigation。
 4. 禁止"只有一个实现的接口"、禁止 UseCase / Repository / Mapper 分层、禁止自己写 DI 容器。
    （`TcpServer.Listener` / `ServiceDiscovery.Listener` 这类回调接口不算：它们是给调用方覆盖的，不是拿来注入的。）

@@ -1,85 +1,173 @@
 package com.poria.game.azul
 
-import java.util.HashSet
-import java.util.PriorityQueue
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.serialization.Serializable
 import java.util.Random
 
-class AzulEngine(private val playerSeq: Map<String, Int>) {
-    private val players by lazy { playerSeq.map { it.key }.toSet() }
-    private val seqPlayer: Map<Int, String> by lazy {
-        val pq = PriorityQueue<Pair<Int, String>>(compareBy { it.first })
-        val hash = HashMap<Int, String>()
-        playerSeq.forEach {
-            check(hash[it.value] == null) { "每个玩家指定唯一顺序" }
-            hash[it.value] = it.key
-            pq.offer(it.value to it.key)
-        }
-        hash.clear()
-        var seq = 0
-        while (pq.isNotEmpty()) {
-            val (_, player) = pq.poll()
-            hash[seq++] = player
-        }
-        hash
-    }
-
-    private var isPlaying = false
+class AzulEngine {
+    private var seqPlayer: List<String> = emptyList()
     private val nextTileList: MutableList<Tile> = mutableListOf()
-    private var gameSeq = 0
-    private var phaseSeq = 0
-    private var gameDesktop = AzulDesktop()
+    private val _state = MutableStateFlow(AzulSnapshot())
 
-    private fun MutableList<Tile>.gainTile(cnt: Int): List<Tile> {
+    /** private function */
+
+    private fun gainTile(cnt: Int = 4): List<Tile> {
         val res: MutableList<Tile> = mutableListOf()
         repeat(cnt) {
-            if (size == 0) return@repeat
+            if (nextTileList.size == 0) return@repeat
             res.add(nextTileList.removeAt(0))
         }
         return res
     }
 
-    private fun MutableList<Tile>.recycleTiles(tiles: List<Tile>) {
+    private fun recycleTiles(tiles: List<Tile>) {
         val random = Random()
         for (t in tiles) {
-            add(random.nextInt(size + 1), t)
+            nextTileList.add(random.nextInt(nextTileList.size + 1), t)
         }
     }
 
-    /** Options */
+    private fun nextPlayer(cur: String): String =
+        seqPlayer[(seqPlayer.indexOf(cur) + 1) % seqPlayer.size]
 
-    fun startGame(): AzulSnapshot {
-        isPlaying = true
+    private fun canFinishRound(snapshot: AzulSnapshot): Boolean = snapshot.desktop.run {
+        plates.isEmpty() && redundant.isEmpty()
+    } && snapshot.phase == AzulPhase.RoundPlaying
+
+    private fun canFinishGame(snapshot: AzulSnapshot): Boolean {
+        if (snapshot.phase != AzulPhase.RoundScore) return false
+        if (snapshot.desktop.shouldFinishGame) return true
+        val (_, tryList) = snapshot.desktop.finishRound()
+        return tryList.isEmpty() && nextTileList.isEmpty()
+    }
+
+    /** Api */
+
+    val state = _state.asStateFlow()
+    val availableTileCnt: Int get() = nextTileList.size
+    val nowCanFinishRound: Boolean get() = canFinishRound(_state.value)
+    val nowNextRoundFirstActPlayer: String? get() = _state.value.desktop.nextRoundFirstActPlayer
+
+    fun prepareNewGame(players: Set<String>) {
+        check(players.size in 2..4) { "游戏玩家数量必须为 2 到 4 人" }
         nextTileList.clear()
         nextTileList.addAll(
             Tile.entries
+                .filter { it != Tile.FirstAct }
                 .flatMap { t -> List(20) { t } }
                 .shuffled()
         )
-        gameSeq = 0
-        phaseSeq = 0
-        gameDesktop = AzulDesktop(
-            players = players,
-            plates = HashSet<AzulPlate>().also {
-                repeat(1 + 2 * players.size) { _ ->
+        _state.update { _ ->
+            val gameDesktop = AzulDesktop(
+                players = players,
+                plates = emptyList(),
+                redundant = emptyList(),
+                workspaces = players.associateWith { AzulWorkspace() }
+            )
+            AzulSnapshot(
+                seq = 0,
+                phase = AzulPhase.Preparing,
+                actPlayer = "",
+                desktop = gameDesktop
+            )
+        }
+    }
+
+    fun startGame(seqPlayers: List<String>) = _state.update { old ->
+        check(old.phase != AzulPhase.Preparing) { "必须在准备阶段后才能开始游戏" }
+        check(old.desktop.players.sorted() == seqPlayers.sorted()) { "和准备时的玩家不匹配" }
+        this.seqPlayer = seqPlayers
+        val (desktop, rt) = old.desktop.placePlates(
+            ArrayList<AzulPlate>().also {
+                repeat(AzulPlate.plateCntForPlayerCnt[seqPlayer.size]) { _ ->
                     if (nextTileList.size == 0) return@repeat
-                    it.add(AzulPlate(nextTileList.gainTile(4)))
+                    it.add(AzulPlate(gainTile()))
                 }
-            },
-            redundant = emptyList(),
-            floors = players.associateWith { AzulFloor() },
-            walls = players.associateWith { AzulWall() }
+            }
         )
-        return AzulSnapshot(
-            seq = gameSeq,
-            whoPhase = seqPlayer[phaseSeq]!!,
-            desktop = gameDesktop
+        recycleTiles(rt)
+        old.copy(
+            seq = old.seq + 1,
+            phase = AzulPhase.RoundPlaying,
+            actPlayer = seqPlayer[0],
+            desktop = desktop
         )
     }
 
+    fun selectTilesFromPlateToRow(
+        tile: Tile, plateTiles: List<Tile>,
+        player: String, row: Int
+    ) = _state.update { old ->
+        check(old.phase == AzulPhase.RoundPlaying) { "必须在 RoundPlaying 执行" }
+        check(!canFinishRound(old)) { "desktop 上没有可以拿的 tile" }
+        val desktop = old.desktop.selectTilesFromPlateToRow(tile, plateTiles, player, row)
+        old.copy(
+            seq = old.seq + 1,
+            actPlayer = nextPlayer(old.actPlayer),
+            desktop = desktop
+        )
+    }
+
+    fun selectTilesFromRedundantToRow(
+        tile: Tile,
+        player: String, row: Int
+    ) = _state.update { old ->
+        check(old.phase == AzulPhase.RoundPlaying) { "必须在 RoundPlaying 执行" }
+        check(!canFinishRound(old)) { "desktop 上没有可以拿的 tile" }
+        val desktop = old.desktop.selectTilesFromRedundantToRow(tile, player, row)
+        old.copy(
+            seq = old.seq + 1,
+            actPlayer = nextPlayer(old.actPlayer),
+            desktop = desktop
+        )
+    }
+
+    fun finishRound() = _state.update { old ->
+        check(old.phase == AzulPhase.RoundPlaying) { "必须在 RoundPlaying 执行" }
+        check(canFinishRound(old)) { "还有可以拿的 tile" }
+        val firstAct = old.desktop.nextRoundFirstActPlayer ?: seqPlayer[0]
+        seqPlayer = ArrayList<String>().apply {
+            val target = seqPlayer.indexOf(firstAct)
+            for (i in target until seqPlayer.size) add(seqPlayer[i])
+            for (i in 0 until target) add(seqPlayer[i])
+        }
+        val (desktop, rt) = old.desktop.finishRound()
+        recycleTiles(rt)
+        old.copy(
+            seq = old.seq + 1,
+            phase = AzulPhase.RoundScore,
+            actPlayer = firstAct,
+            desktop = desktop
+        )
+    }
+
+    fun nextRoundOrFinishGame() = _state.update { old ->
+        check(old.phase == AzulPhase.RoundScore) { "必须在 RoundScore 执行" }
+        val nextRound = old.copy(
+            seq = old.seq + 1,
+            phase = AzulPhase.RoundPlaying
+        )
+        if (!canFinishGame(old)) return@update nextRound
+        nextRound.copy(
+            phase = AzulPhase.EndSpecialScore,
+            desktop = old.desktop.finishGame()
+        )
+    }
 }
 
-data class AzulSnapshot(
-    val seq: Int,
-    val whoPhase: String,
-    val desktop: AzulDesktop
+@Serializable
+data class AzulSnapshot internal constructor(
+    val seq: Int = 0,
+    val phase: AzulPhase = AzulPhase.Preparing,
+    val actPlayer: String = "",
+    val desktop: AzulDesktop = AzulDesktop()
 )
+
+enum class AzulPhase {
+    Preparing,
+    RoundPlaying,
+    RoundScore,
+    EndSpecialScore,
+}

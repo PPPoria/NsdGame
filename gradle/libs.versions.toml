@@ -29,8 +29,12 @@ androidx-datastore-preferences = { group = "androidx.datastore", name = "datasto
 androidx-recyclerview = { group = "androidx.recyclerview", name = "recyclerview", version.ref = "recyclerview" }
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+# 纯 Kotlin（不是 Android）：:game-core 只可能用到它，用不到 Dispatchers.Main 那种 Android 侧的东西
+kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
 # 房间协议（:app-net）用 JSON 编解码：@Serializable 数据类 + 快照整份序列化
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+# :game-core 只需要打 @Serializable 注解 + 让编译器生成 serializer（真正编码还在 :app-net 的 Json）
+kotlinx-serialization-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-core", version.ref = "kotlinxSerialization" }
 
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
