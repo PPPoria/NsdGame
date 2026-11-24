@@ -25,6 +25,7 @@ class AzulEngine {
     private fun recycleTiles(tiles: List<Tile>) {
         val random = Random()
         for (t in tiles) {
+            if (t == Tile.FirstAct) continue
             nextTileList.add(random.nextInt(nextTileList.size + 1), t)
         }
     }

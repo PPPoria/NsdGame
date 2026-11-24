@@ -35,7 +35,10 @@ data class AzulDesktop internal constructor(
         return copy(
             plates = newPlates,
             redundant = newRedundant,
-            workspaces = workspaces + (player to workspace.add(row, tile, quantity))
+            workspaces = workspaces + (player to workspace.add(
+                row, tile, quantity,
+                nextRoundFirstActPlayer == null
+            ))
         )
     }
 
@@ -50,13 +53,17 @@ data class AzulDesktop internal constructor(
         val quantity = redundant.count { it == tile }
         return copy(
             redundant = newRedundant,
-            workspaces = workspaces + (player to workspace.add(row, tile, quantity))
+            workspaces = workspaces + (player to workspace.add(
+                row, tile, quantity,
+                nextRoundFirstActPlayer == null
+            ))
         )
     }
 
-    internal val nextRoundFirstActPlayer: String? get() = workspaces.entries.find { entry ->
-        entry.value.punishment.tiles.contains(Tile.FirstAct)
-    }?.key
+    internal val nextRoundFirstActPlayer: String?
+        get() = workspaces.entries.find { entry ->
+            entry.value.punishment.tiles.contains(Tile.FirstAct)
+        }?.key
 
     internal fun finishRound(): Pair<AzulDesktop, List<Tile>> {
         val rt = ArrayList<Tile>()
@@ -75,9 +82,10 @@ data class AzulDesktop internal constructor(
         ) to rt
     }
 
-    internal val shouldFinishGame: Boolean get() = workspaces.any { entry ->
-        entry.value.wall.grid.any { list -> list.all { it != null } }
-    }
+    internal val shouldFinishGame: Boolean
+        get() = workspaces.any { entry ->
+            entry.value.wall.grid.any { list -> list.all { it != null } }
+        }
 
     internal fun finishGame(): AzulDesktop = finishRound().first.let { nd ->
         nd.copy(
@@ -105,11 +113,15 @@ data class AzulWorkspace internal constructor(
     val wall: AzulWall = AzulWall(),
     val score: Int = 0
 ) {
-    internal fun add(row: Int, tile: Tile, quantity: Int): AzulWorkspace {
+    internal fun add(row: Int, tile: Tile, quantity: Int, isFirstAct: Boolean): AzulWorkspace {
         val (newFloor, punishmentTiles) = floor.add(row, tile, quantity)
         return copy(
             floor = newFloor,
-            punishment = AzulPunishment(punishmentTiles)
+            punishment = AzulPunishment(
+                punishmentTiles +
+                        if (isFirstAct) listOf(Tile.FirstAct)
+                        else emptyList()
+            )
         )
     }
 
