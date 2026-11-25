@@ -1,10 +1,58 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
+<!--
+  花砖对局页：三个区域从上到下。
+
+  1. 其他玩家：横向列表（每人一块「头 + 工作区」，用的是和"我自己"同一个 AzulPlayerLayout）；
+  2. 公共区：上面工厂盘、下面中央区（GainTileLayout）；
+  3. 我的操作区：占满整屏宽度的一块工作区。
+
+  尺寸不写死：工作区从自己的宽度推砖的大小，公共区那一排砖的高度由对局页
+  把"我的砖"的实测边长喂给 AzulRedundantLayout——这样"场上的砖"和"我的砖"始终同一个数。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/main"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:paddingStart="@dimen/space_s"
+    android:paddingEnd="@dimen/space_s"
     tools:context=".ui.azul.AzulGameActivity">
 
-</androidx.constraintlayout.widget.ConstraintLayout>
+    <!-- 1. 其他玩家（最多三个，横着一排等分屏宽；没有滑动，尽量把棋盘撑大） -->
+    <LinearLayout
+        android:id="@+id/azulOthers"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal" />
+
+    <!-- 2. 公共区：盘子在上，中央区在下 -->
+    <LinearLayout
+        android:id="@+id/azulGainTile"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="@dimen/space_s"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <com.ppporia.nsdgames.ui.azul.AzulPlatesLayout
+            android:id="@+id/azulPlates"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <com.ppporia.nsdgames.ui.azul.AzulRedundantLayout
+            android:id="@+id/azulRedundant"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_s" />
+    </LinearLayout>
+
+    <!-- 3. 我的操作区：整屏宽 -->
+    <com.ppporia.nsdgames.ui.azul.AzulPlayerLayout
+        android:id="@+id/azulMe"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/space_s" />
+
+</LinearLayout>

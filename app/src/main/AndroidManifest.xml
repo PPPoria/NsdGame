@@ -12,9 +12,16 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.NsdGames">
+        <!--
+          对局页锁竖屏：4 人局在竖屏里"我的棋盘 + 公共区"能同时站住（横屏时公共区只剩 ~140dp 高，
+          盘子会挤成两行薄的）。configChanges 跟着房间页一起配：转屏/分屏变化不重建 Activity，
+          一局打到一半不该因为翻一下手机就重来订阅。
+        -->
         <activity
             android:name=".ui.azul.AzulGameActivity"
-            android:exported="false" />
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
+            android:exported="false"
+            android:screenOrientation="portrait" />
         <activity
             android:name=".ui.rooms.RoomsActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"

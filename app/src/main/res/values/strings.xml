@@ -69,4 +69,21 @@
     <string name="settings_options">玩法</string>
     <string name="settings_no_options">这个游戏还没有可调的玩法</string>
     <string name="settings_note">改人数、换游戏、开关玩法都会清空所有人的「准备好」</string>
+
+    <!-- 花砖对局页 -->
+    <string name="azul_score">%1$d 分</string>
+    <string name="azul_score_short">%1$d</string>
+    <string name="azul_avatar">玩家头像</string>
+    <!-- 先手砖：盖在砖上的小字，一眼能认出"这块也跟着走" -->
+    <string name="azul_first_act">先</string>
+    <!-- 惩罚区空位上的分值；传进来的是正数，显示成「−1」 -->
+    <string name="azul_penalty">−%1$d</string>
+    <!-- 惩罚区右边那个合计：0 = 还没掉砖 -->
+    <string name="azul_penalty_zero">0</string>
+    <!-- 中央区统计模式：某种颜色还剩几块 -->
+    <string name="azul_tile_rest">×%1$d</string>
+    <!-- 不是你的回合还去点砖 -->
+    <string name="azul_not_my_turn">还没轮到你</string>
+    <!-- 本轮已经在结算（引擎那 1.5 秒） -->
+    <string name="azul_settling">这一轮正在结算，等一下</string>
 </resources>

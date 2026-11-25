@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.poria.game.azul.AzulPhase
 import com.poria.game.azul.AzulSnapshot
+import com.poria.game.azul.AzulWorkspace
 import com.poria.game.azul.Tile
 import com.poria.netnsd.azul.AzulChannel
 import com.poria.netnsd.azul.AzulGameState
@@ -137,6 +138,9 @@ class AzulGameVM : ViewModel() {
             score = snapshot.desktop.workspaces[id]?.score ?: 0,
             act = snapshot.actPlayer == id,
             mine = id == gameState.value.myId,
+            // 棋盘原样带出来：UI 只读（floor.rows / wall.grid / punishment.tiles），
+            // 规则和判定全在 :game-core，这里不做任何加工
+            workspace = snapshot.desktop.workspaces[id],
         )
     }
 
@@ -172,4 +176,11 @@ data class AzulPlayerUi(
     /** 当前该他动。 */
     val act: Boolean,
     val mine: Boolean,
+    /**
+     * 他的棋盘（预备区 / 墙面 / 惩罚区）。**只读**：UI 画它，不判定它。
+     *
+     * 带上它是因为对局页要一次画四个人的盘，而 `AzulWorkspace` 的构造器是 `internal`
+     * （:app 造不出来、只能读），所以"由 VM 把手里已有的那份递给 UI"是最省事的形状。
+     */
+    val workspace: AzulWorkspace? = null,
 )

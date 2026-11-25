@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      花砖的五种颜色 + 先手砖。
+
+      顺序和 `:game-core` 的 `Tile` 枚举（Blue/Yellow/Red/Black/White）一致：
+      墙面的拉丁方（`AzulWall.tileColIdx`）就是按这个顺序算 offset 的，
+      所以这里改顺序不会出错（取色走枚举），但**看着要能对上**。
+
+      现在是纯色块：`AzulTileCell.bitmap` 那条通道留着，
+      将来有纹理（`builtin:azul.*`）只换那一层，布局一行都不用改。
+    -->
+    <color name="azul_tile_blue">#2F6FBF</color>
+    <color name="azul_tile_yellow">#D8A32E</color>
+    <color name="azul_tile_red">#BE4230</color>
+    <color name="azul_tile_black">#2C323D</color>
+    <!-- 白砖要"偏象牙"，别用纯白：浅色主题下纯白块会糊在背景里 -->
+    <color name="azul_tile_white">#E4DAC2</color>
+    <color name="azul_tile_first">#7A8391</color>
+
+    <!-- 空格子：半透明黑。深浅主题下都只是"比底色深一点"，但得看得见（惩罚区小号排版就靠它）。 -->
+    <color name="azul_slot">#33000000</color>
+</resources>

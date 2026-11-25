@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  一个"格子"，对局页里所有砖和所有空位都用它：
+
+  - 底色 = 砖的颜色（`AzulTileCell.backgroundColor` → `setCardBackgroundColor`）；
+  - `bitmap` 是花纹层（现在还没有素材，留空就是纯色块）；
+  - `highlight` 是选中态的高亮环（下一步做交互时用）；
+  - `text` 叠在最上面：先手砖的「先」、惩罚区的「−1」、溢出时的「＋3」。
+
+  描边不能省：白砖 / 空位在浅色主题下没有边界就成了一片。
+-->
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    app:cardBackgroundColor="@color/azul_slot"
+    app:cardCornerRadius="4dp"
+    app:cardElevation="0dp"
+    app:strokeColor="?attr/colorOutlineVariant"
+    app:strokeWidth="1dp">
+
+    <View
+        android:id="@+id/item_azul_title_cell_highlight"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#78E0F8"
+        android:visibility="invisible" />
+
+    <!--变相等于高亮宽度为1-->
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_margin="2dp">
+
+        <!--圆角Image，r要比4大-->
+        <com.google.android.material.imageview.ShapeableImageView
+            android:id="@+id/item_azul_title_cell_image"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="centerCrop"
+            app:shapeAppearanceOverlay="@style/AzulTileCell.ShapeRounded" />
+
+        <!--顶层文字(通常是数字)-->
+        <TextView
+            android:id="@+id/item_azul_title_cell_text"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_margin="2dp"
+            android:background="@drawable/bg_corner_pill"
+            android:backgroundTint="#80000000"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:textColor="#FFFFFFFF"
+            android:textSize="@dimen/text_caption"
+            android:textStyle="normal"
+            android:visibility="invisible" />
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+</com.google.android.material.card.MaterialCardView>

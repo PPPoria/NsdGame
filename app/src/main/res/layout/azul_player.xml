@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  一个玩家的头 + 他的工作区。**用 merge**：外层就是 AzulPlayerLayout 自己（一个竖 LinearLayout），
+  这样"其他玩家"和"我自己"两份用的是同一套 XML，只在代码里改字号/头像大小。
+
+  头像没设或者图还没到时显示昵称首字（房间页那一套还没搬过来，先这么兜着）。
+-->
+<merge xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <LinearLayout
+        android:id="@+id/azulPlayerHeader"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/space_s"
+        android:paddingTop="@dimen/space_xs"
+        android:paddingEnd="@dimen/space_s"
+        android:paddingBottom="@dimen/space_xs">
+
+        <FrameLayout
+            android:id="@+id/azulPlayerAvatarBox"
+            android:layout_width="40dp"
+            android:layout_height="40dp">
+
+            <com.google.android.material.imageview.ShapeableImageView
+                android:id="@+id/azulPlayerAvatar"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@string/azul_avatar"
+                android:scaleType="centerCrop"
+                app:shapeAppearanceOverlay="@style/AzulAvatar.ShapeCircle" />
+
+            <TextView
+                android:id="@+id/azulPlayerAvatarFallback"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@drawable/bg_corner_pill"
+                android:backgroundTint="?attr/colorPrimaryContainer"
+                android:gravity="center"
+                android:includeFontPadding="false"
+                android:textColor="?attr/colorOnPrimaryContainer"
+                android:textSize="@dimen/text_label"
+                android:textStyle="bold"
+                tools:text="小" />
+        </FrameLayout>
+
+        <TextView
+            android:id="@+id/azulPlayerName"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/space_s"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textSize="@dimen/text_label"
+            android:textStyle="bold"
+            tools:text="小明" />
+
+        <TextView
+            android:id="@+id/azulPlayerScore"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/space_xs"
+            android:fontVariationSettings="'wght' 700"
+            android:textColor="?attr/colorPrimary"
+            android:textSize="@dimen/text_subtitle"
+            android:textStyle="bold"
+            tools:text="27 分" />
+
+        <View
+            android:id="@+id/azulPlayerTurnDot"
+            android:layout_width="8dp"
+            android:layout_height="8dp"
+            android:layout_marginStart="@dimen/space_s"
+            android:background="@drawable/bg_corner_pill"
+            android:backgroundTint="?attr/colorPrimary"
+            android:visibility="invisible"
+            tools:visibility="visible" />
+    </LinearLayout>
+
+    <com.ppporia.nsdgames.ui.azul.AzulWorkspaceLayout
+        android:id="@+id/azulPlayerWorkspace"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content" />
+
+</merge>

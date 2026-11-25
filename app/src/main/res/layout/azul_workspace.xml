@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  一个玩家的工作区：
+
+    ┌──────────┬──────────┐
+    │ 预备区   │  墙面    │   ← 两个 AzulGridLayout，各占一半宽（宽度定砖、高度定宽）
+    ├──────────┴──────────┤
+    │ ◀ ▪▪▪▪▪▪▪▪▪▪… ▶ −5 │   ← 惩罚区：14 格全部摆下，滑过去就知道剩下的扣分项
+    └─────────────────────┘
+
+  惩罚区用"横向滚动 + 一排固定 14 格"而不是"算能放几格再动态加"：
+  格数跟宽度解耦，就不会出现"宽度还没量出来 → 一格都没加 → 整块消失"这种事；
+  而且 14 格是引擎 `AzulPunishment.punishment` 的上限，用户滑一下就知道后面还有几档。
+  右边那个非正数不进滚动区：它是"这一区一共扣多少"，必须一直在。
+-->
+<merge xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <LinearLayout
+        android:id="@+id/azulWorkspaceBoard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <!--
+          宽度由 AzulWorkspaceLayout 在 onMeasure 里算好再写进 layoutParams：
+          两个棋盘**严格等宽**，多出来的那 0/1px 全塞给中间这列三角形。
+          所以这里写 0dp + 不要 weight（weight 会被覆盖，写清楚免得误导）。
+        -->
+        <com.ppporia.nsdgames.ui.azul.AzulGridLayout
+            android:id="@+id/azulWorkspaceFloor"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content" />
+
+        <!-- 预备区 → 墙面：朝右的等腰三角形，一行一个 -->
+        <com.ppporia.nsdgames.ui.azul.AzulArrowLayout
+            android:id="@+id/azulWorkspaceArrow"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:importantForAccessibility="no" />
+
+        <com.ppporia.nsdgames.ui.azul.AzulGridLayout
+            android:id="@+id/azulWorkspaceWall"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/azulWorkspacePunishment"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <HorizontalScrollView
+            android:id="@+id/azulWorkspacePunishScroll"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:scrollbars="horizontal">
+
+            <LinearLayout
+                android:id="@+id/azulWorkspacePunishSlots"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
+
+        <TextView
+            android:id="@+id/azulWorkspacePenalty"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/space_xs"
+            android:includeFontPadding="false"
+            android:textSize="@dimen/text_label"
+            android:textStyle="bold"
+            tools:text="−5" />
+    </LinearLayout>
+
+</merge>
